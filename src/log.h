@@ -18,6 +18,9 @@
 #ifndef _LOG_H
 #define _LOG_H
 
+#define L(msg)                                          \
+    "<%s:%d (%s)> "msg, __FILE__, __LINE__, __func__
+
 /* log.c */
 void             log_init(int, const char *);
 void             log_warn(const char *, const char *, ...) __attribute__ ((format (printf, 2, 3)));

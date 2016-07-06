@@ -26,6 +26,8 @@
 
 #include <stdlib.h>
 
+#define DEFAULT_COMPRESSION_LEVEL -1
+
 /* TODO:5001 Declare here functions that you will use in several files. Those
  * TODO:5001 functions should not be prefixed with `static` keyword. All other
  * TODO:5001 functions should.

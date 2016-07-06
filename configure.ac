@@ -62,11 +62,8 @@ esac
 
 AC_CACHE_SAVE
 
-## TODO:2003 Add the dependencies of your project here.
-## TODO:2003 The use of "jansson" here is not mandatory. You don't have
-## TODO:2003 to keep it.
-
-PKG_CHECK_MODULES([JANSSON], [jansson >= 2.1])
+PKG_CHECK_MODULES([ZLIB], [zlib])
+AC_CHECK_HEADERS([sys/types.h sys/socket.h sys/epoll.h sys/queue.h])
 
 AC_CACHE_SAVE
 
