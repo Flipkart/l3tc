@@ -20,11 +20,13 @@
 
 #include "l3tc.h"
 #include "common.h"
+#include "tun.h"
 
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
 #include <getopt.h>
+#include <assert.h>
 
 extern const char *__progname;
 
@@ -89,7 +91,7 @@ int main(int argc, char *argv[]) {
 			break;
 		case 'p':
             assert(peer_file == NULL);
-            peer_file = strndup(optarg, MAX_FILE_PATH);
+            peer_file = strndup(optarg, MAX_FILE_PATH_LEN);
 			break;
 		case 's':
             assert(self_addr == NULL);
@@ -120,18 +122,19 @@ int main(int argc, char *argv[]) {
         error = "Self address not provided";
     }
 
+    int tun_fd;
     if (! error) {
         log_debug("main", "Allocating tun");
-        int tun_fd = alloc_tun(tun_up_cmd);
+        tun_fd = alloc_tun();
         if (tun_fd <= 0) {
             error = "Could not open tunnel";
         }
     }
 
-    if (! error) {
-        if (io(tun_fd, peer_file, self_addr, listener_port) != 0)
-            error = "io loop failed";
-    }
+    /* if (! error) { */
+    /*     if (io(tun_fd, peer_file, self_addr, listener_port) != 0) */
+    /*         error = "io loop failed"; */
+    /* } */
 
     free(self_addr);
     free(peer_file);

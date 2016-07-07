@@ -6,7 +6,8 @@ AC_INIT([l3tc],
         [singh.janmejay@gmail.com])
 AC_CONFIG_SRCDIR([src/log.c])
 AC_CONFIG_HEADER([config.h])
-AC_CONFIG_FILES([Makefile src/Makefile])
+AC_GNU_SOURCE
+AC_CONFIG_FILES([Makefile src/Makefile test/Makefile])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign -Wall -Werror tar-ustar])
 AM_MAINTAINER_MODE
@@ -63,13 +64,32 @@ esac
 AC_CACHE_SAVE
 
 PKG_CHECK_MODULES([ZLIB], [zlib])
-AC_CHECK_HEADERS([sys/types.h sys/socket.h sys/epoll.h sys/queue.h])
+AC_CHECK_HEADERS([sys/types.h sys/socket.h sys/epoll.h sys/queue.h uthash.h assert.h])
 
-AC_CACHE_SAVE
+AC_ARG_ENABLE(valgrind,
+        [AS_HELP_STRING([--enable-valgrind], [Run testbench with valgrind. @<:@default=no@:>@])],
+        [case "${enableval}" in
+         yes) enable_valgrind="yes" ;;
+          no) enable_valgrind="no" ;;
+           *) AC_MSG_ERROR(bad value ${enableval} for --enable-valgrind) ;;
+         esac],
+        [enable_valgrind=no]
+)
+AC_CHECK_PROG([has_valgrind], [valgrind], ["yes"], ["no"])
+
+AS_IF(
+[test "x$enable_valgrind" = "xyes" && test "x$has_valgrind" == "xyes"], [
+    AC_MSG_NOTICE([Valgrind enabled for test-run])
+    USE_VALGRIND="yes"
+],
+[USE_VALGRIND="no"])
+
+AM_CONDITIONAL(WITH_VALGRIND, test $USE_VALGRIND == "yes")
 
 AC_SUBST([MORE_CFLAGS])
 AC_SUBST([MORE_CPPFLAGS])
 AC_SUBST([MORE_LDFLAGS])
+AC_SUBST([USE_VALGRIND])
 AC_OUTPUT
 
 cat <<EOF

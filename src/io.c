@@ -9,7 +9,7 @@ typedef struct io_ctx_s io_ctx_t;
 typedef struct io_sock_s io_sock_t;
 
 struct io_sock_s {
-    STAILQ_ENTRY(io_req_s) link;
+    LIST_ENTRY(io_req_s) link;
     int fd;
     io_ctx_t *ctx;
     enum {
@@ -17,13 +17,19 @@ struct io_sock_s {
 		conn,
 		tun
 	} typ;
+    int alive;
     struct epoll_event evt;
-    void *dat;
+    union {
+        struct {
+            char peer_host;
+            int peer_port;
+        } conn;
+    } d;
 };
 
 struct io_ctx_s {
-    STAILQ_HEAD(sock_s, io_sock_s) live_sockets;
-    STAILQ_HEAD(sock_s, io_sock_s) dead_sockets;
+    LIST_HEAD(sock_s, io_sock_s) live_sockets;
+    LIST_HEAD(sock_s, io_sock_s) dead_sockets;
     int tun_fd;
     int epoll_fd;
 };
@@ -34,7 +40,7 @@ static io_ctx_t * init_io_ctx(int tun_fd) {
 #	if defined(EPOLL_CLOEXEC) && defined(HAVE_EPOLL_CREATE1)
 	log_debug("io", L("using epoll_create1"));
 	epollfd = epoll_create1(EPOLL_CLOEXEC);
-	if(epollfd < 0 && errno == ENOSYS)
+	if((epollfd < 0) && (ENOSYS == errno))
 #	endif
 	{
 		log_warn("io", L("uses epoll_create"));
@@ -48,7 +54,7 @@ static io_ctx_t * init_io_ctx(int tun_fd) {
     }
 
     io_ctx_t *ctx = calloc(1, sizeof(io_ctx_t));
-    if (ctx == NULL) {
+    if (NULL == ctx) {
         log_warn("io", L("Could not allocate mem for ctx"));
         close(epollfd);
         return NULL;
@@ -56,27 +62,36 @@ static io_ctx_t * init_io_ctx(int tun_fd) {
 
     ctx->epoll_fd = epollfd;
     ctx->tun_fd = tun_fd;
-    SLIST_INIT(ctx->sockets);
+    LIST_INIT(ctx->live_sockets);
+    LIST_INIT(ctx->dead_sockets);
     
     return ctx;
 }
 
 static inline void destroy_sock(io_sock_t *sock) {
-    if (sock == NULL) return;
+    if (NULL == sock) return;
     log_debug("io", L("destroying socket of type: %d (fd: %d)"), sock->typ, sock->fd);
-    if (sock->typ == conn) {
+
+    switch(sock->typ) {
+    case conn:
         teardown_route(sock);
+        free(sock->d.conn.peer_host);
+        break;
+    case lstn:
+    case tun:
+    default:
     }
     if (epoll_ctl(sock->ctx, EPOLL_CTL_DEL, sock->fd, NULL)) {
         log_warn("io", L("removal from epoll context for fd: %d failed"), sock->fd);
     }
-    SLIST_REMOVE(&ctx->sockets, sock, io_sock_s, link);
+    LIST_REMOVE((sock->alive ? &ctx->live_sockets : &ctx->dead_sockets), sock, io_sock_s, link);
     close(sock->fd);
     free(sock);
 }
 
-static inline int add_sock(io_ctx_t *ctx, int fd, int typ) {
+static inline int add_sock(io_ctx_t *ctx, int fd, int typ, int alive, io_sock_t **res) {
     log_debug("io", L("creating socket of type: %d (fd: %d)"), typ, fd);
+    if (res != NULL) *res = NULL;
     io_sock_t *sock = calloc(1, sizeof(io_sock_t));
     if (sock == NULL) {
         log_warn("io", L("failed to allocate memory for listerner socket object, closing fd"));
@@ -86,7 +101,7 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ) {
     sock->fd = fd;
     sock->ctx = ctx;
 
-    SLIST_INSERT_HEAD(&ctx->sockets, sock, link);
+    LIST_INSERT_HEAD((alive ? &ctx->live_sockets : &ctx->dead_sockets), sock, link);
     sock->evt.events = EPOLLIN|EPOLLOUT|EPOLLHUP|EPOLLET;
     sock->evt.data.ptr = sock;
     
@@ -95,7 +110,8 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ) {
         destroy_sock(sock);
         return -1;
     }
-    
+
+    if (res != NULL) *res = sock;
     return 0;
 }
 
@@ -152,7 +168,7 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
 		}
 
 
-        if (add_sock(ctx, sock, lstn) != 0) {
+        if (add_sock(ctx, sock, lstn, 1, NULL) != 0) {
             log_warn("io", L("failed to add listener-socket"));
             close(sock);
             continue;
@@ -211,10 +227,21 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
                 if (c_fd < 0) {
                     log_warn("io", L("could not create socket for connecting to peer: %s"), peer);
                 } else {
-                    if (connect(c_fd, res->ai_addr, res->ai_addrlen) != 0) {
-                        log_warn("io", L("could not connect to peer: %s"), peer);
-                        close(c_fd);
+                    int connected = (connect(c_fd, res->ai_addr, res->ai_addrlen) == 0);
+                    if (! connected) {
+                        log_warn("io", L("could not connect to peer: %s, will retry later"), peer);
+                    } else {
+                        log_info("io", L("connnected as client to peer: %s"), peer);
                     }
+                    io_sock_t *sock;
+                    if (add_sock(ctx, c_fd, conn, connected, &sock) == 0) {
+                        sock->d.conn.peer_host = strdup(host_buff);
+                        sock->d.conn.peer_port = atoi(port_buff);
+                    } else {
+                        
+                    }
+
+                    
                 }
             }
         }

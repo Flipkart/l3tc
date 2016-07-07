@@ -5,5 +5,5 @@
 #  include <config.h>
 #endif
 
-int alloc_tun(const char *tun_up_cmd);
+int alloc_tun();
 #endif

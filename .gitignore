@@ -4,6 +4,9 @@
 *.a
 *.la
 /build*/
+/src/.deps
+/test/.deps
+/src/l3tc
 
 # autotools stuff
 /m4/lt*.m4
@@ -20,10 +23,18 @@
 /depcomp
 /missing
 /test-driver
+/stamp-h1
+/libtool
+/config.log
+/ChangeLog
+/config.h
+/config.status
+
 
 # automake
 /ar-lib
 Makefile.in
+Makefile
 
 # cscope and other tags
 /cscope.*
@@ -31,3 +42,9 @@ Makefile.in
 /GRTAGS
 /GSYMS
 /GTAGS
+
+*.log
+*.trs
+/test/*_test
+
+TAGS
