@@ -2,27 +2,27 @@
 #include <assert.h>
 
 void test_with_statically_allocated_values() {
-    htab_t tab;
+    shtab_t tab;
 
-    assert(htab_init(&tab, NULL, "static-alloc") == 0);
+    assert(shtab_init(&tab, NULL, "static-alloc") == 0);
 
-    htab_put(&tab, "foo", "bar", NULL);
-    htab_put(&tab, "bar", "baz", NULL);
-    htab_put(&tab, "quux", "corge", NULL);
+    shtab_put(&tab, "foo", "bar", NULL);
+    shtab_put(&tab, "bar", "baz", NULL);
+    shtab_put(&tab, "quux", "corge", NULL);
 
-    assert(strcmp(htab_get(&tab, "foo"), "bar") == 0);
-    assert(strcmp(htab_get(&tab, "bar"), "baz") == 0);
-    assert(strcmp(htab_get(&tab, "quux"), "corge") == 0);
+    assert(strcmp(shtab_get(&tab, "foo"), "bar") == 0);
+    assert(strcmp(shtab_get(&tab, "bar"), "baz") == 0);
+    assert(strcmp(shtab_get(&tab, "quux"), "corge") == 0);
 
     char *old_val = NULL;
-    htab_put(&tab, "bar", "grault", (void **)&old_val);
+    shtab_put(&tab, "bar", "grault", (void **)&old_val);
     assert(strcmp(old_val, "baz") == 0);
 
     char buff[1024];
     buff[0]='\0';
 
-    htab_entry_t *e;
-    htab_foreach_do((&tab), e) {
+    shtab_entry_t *e;
+    shtab_foreach_do((&tab), e) {
         strcat(buff, e->key);
         strcat(buff, "=");
         strcat(buff, e->value);
@@ -31,7 +31,7 @@ void test_with_statically_allocated_values() {
 
     assert(strcmp(buff, "foo=bar;bar=grault;quux=corge;") == 0);
     
-    htab_destory(&tab);
+    shtab_destory(&tab);
 }
 
 typedef struct foo {
@@ -74,21 +74,21 @@ void test_with_complex_dynamically_allocated_values() {
     four->next->value = strdup("NEXT of FOUR");
     four->next->next = NULL;
 
-    htab_t tab;
+    shtab_t tab;
 
-    assert(htab_init(&tab, foo_destructor, "dyn-alloc") == 0);
+    assert(shtab_init(&tab, foo_destructor, "dyn-alloc") == 0);
 
-    htab_put(&tab, "foo", one, NULL);
-    htab_put(&tab, "bar", two, NULL);
+    shtab_put(&tab, "foo", one, NULL);
+    shtab_put(&tab, "bar", two, NULL);
 
-    assert(strcmp(((F*) htab_get(&tab, "foo"))->value, "ONE") == 0);
-    assert(strcmp(((F*) htab_get(&tab, "bar"))->value, "TWO") == 0);
+    assert(strcmp(((F*) shtab_get(&tab, "foo"))->value, "ONE") == 0);
+    assert(strcmp(((F*) shtab_get(&tab, "bar"))->value, "TWO") == 0);
 
     char buff[1024];
-    htab_entry_t *e;
+    shtab_entry_t *e;
     
     buff[0]='\0';
-    htab_foreach_do((&tab), e) {
+    shtab_foreach_do((&tab), e) {
         strcat(buff, e->key);
         strcat(buff, "=");
         F *v = (F*) e->value;
@@ -103,17 +103,17 @@ void test_with_complex_dynamically_allocated_values() {
     assert(strcmp(buff, "foo=ONE,NEXT of ONE,;bar=TWO,;") == 0);
 
     F *old_val = NULL;
-    htab_put(&tab, "bar", three, (void**)&old_val);
-    assert(strcmp(((F*) htab_get(&tab, "bar"))->value, "THREE") == 0);
+    shtab_put(&tab, "bar", three, (void**)&old_val);
+    assert(strcmp(((F*) shtab_get(&tab, "bar"))->value, "THREE") == 0);
     assert(strcmp(old_val->value, "TWO") == 0);
 
     foo_destructor(two);
 
-    htab_put(&tab, "bar", four, NULL);
-    assert(strcmp(((F*) htab_get(&tab, "bar"))->value, "FOUR") == 0);
+    shtab_put(&tab, "bar", four, NULL);
+    assert(strcmp(((F*) shtab_get(&tab, "bar"))->value, "FOUR") == 0);
 
     buff[0]='\0';
-    htab_foreach_do((&tab), e) {
+    shtab_foreach_do((&tab), e) {
         strcat(buff, e->key);
         strcat(buff, "=");
         F *v = (F*) e->value;
@@ -125,8 +125,15 @@ void test_with_complex_dynamically_allocated_values() {
         strcat(buff, ";");
     }
     assert(strcmp(buff, "foo=ONE,NEXT of ONE,;bar=FOUR,NEXT of FOUR,;") == 0);
+
+    shtab_remove(&tab, "bar");
+
+    assert(shtab_get(&tab, "bar") == NULL);
+    assert(strcmp(((F*) shtab_get(&tab, "foo"))->value, "ONE") == 0);
+
+    shtab_remove(&tab, "quux"); /* a key that does not exist */
     
-    htab_destory(&tab);
+    shtab_destory(&tab);
 }
 
 int main() {

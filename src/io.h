@@ -6,4 +6,6 @@
 #endif
 
 int io(int tun_fd, const char* peer_file_path, const char* self_addr, int listener_port);
+
+void reset_peers();
 #endif

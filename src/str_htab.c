@@ -1,7 +1,7 @@
 #include "str_htab.h"
 #include "log.h"
 
-int htab_init(htab_t *tab, value_destructor_t *val_destructor, const char *name) {
+int shtab_init(shtab_t *tab, value_destructor_t *val_destructor, const char *name) {
     log_info("ht", L("initializing hash-table %s"), name);
     tab->t = NULL;
     tab->name = NULL;
@@ -15,41 +15,41 @@ int htab_init(htab_t *tab, value_destructor_t *val_destructor, const char *name)
     return 0;
 }
 
-static inline void _htab_free_val(htab_t *tab, void *val) {
+static inline void _shtab_free_val(shtab_t *tab, void *val) {
     if (tab->val_destructor != NULL) tab->val_destructor(val);
 }
 
-static inline void _htab_del_entry(htab_t *tab, htab_entry_t *e) {
+static inline void _shtab_del_entry(shtab_t *tab, shtab_entry_t *e) {
     HASH_DEL(tab->t, e);
     free(e->key);
-    _htab_free_val(tab, e->value);
+    _shtab_free_val(tab, e->value);
     free(e);
 }
 
-void htab_destory(htab_t *tab) {
-    htab_entry_t *e, *tmp;
+void shtab_destory(shtab_t *tab) {
+    shtab_entry_t *e, *tmp;
     HASH_ITER(hh, tab->t, e, tmp) {
-        _htab_del_entry(tab, e);
+        _shtab_del_entry(tab, e);
     }
     free(tab->name);
 }
 
-static inline htab_entry_t *_htab_get(htab_t *tab, char *key) {
-    htab_entry_t *e;
+static inline shtab_entry_t *_shtab_get(shtab_t *tab, char *key) {
+    shtab_entry_t *e;
     HASH_FIND_STR(tab->t, key, e);
     return e;
 }
 
-void *htab_get(htab_t *tab, char *key) {
-    htab_entry_t *e = _htab_get(tab, key);
+void *shtab_get(shtab_t *tab, char *key) {
+    shtab_entry_t *e = _shtab_get(tab, key);
     if (e == NULL) return NULL;
     return e->value;
 }
 
-int htab_put(htab_t *tab, char *key, void *new_value, void **old_value) {
-    htab_entry_t *e = _htab_get(tab, key);
+int shtab_put(shtab_t *tab, char *key, void *new_value, void **old_value) {
+    shtab_entry_t *e = _shtab_get(tab, key);
     if (e == NULL) {
-        e = malloc(sizeof(htab_entry_t));
+        e = malloc(sizeof(shtab_entry_t));
         if (e == NULL) {
             log_warn("str_ht", L("failed to insert key %s and value %p into hash-table %s (couldn't allocate entry)"), key, new_value, tab->name);
             return -1;
@@ -66,15 +66,15 @@ int htab_put(htab_t *tab, char *key, void *new_value, void **old_value) {
         if (old_value != NULL)
             *old_value = e->value;
         else
-            _htab_free_val(tab, e->value);
+            _shtab_free_val(tab, e->value);
         
         e->value = new_value;
     }
     return 0;
 }
 
-void htab_remove(htab_t *tab, char *key) {
-    htab_entry_t *e = _htab_get(tab, key);
+void shtab_remove(shtab_t *tab, char *key) {
+    shtab_entry_t *e = _shtab_get(tab, key);
     if (e == NULL) return;
-    _htab_del_entry(tab, e);
+    _shtab_del_entry(tab, e);
 }
