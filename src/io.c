@@ -4,6 +4,7 @@
 #include "common.h"
 
 #define LISTEN_BACKLOG 1024
+#define INET_ADDR_STRING_LEN 48;
 
 #define IPv4_ADDR_LEN sizeof(((struct in_addr *)0)->s_addr)
 #define IPv6_ADDR_LEN sizeof(((struct in6_addr *)0)->s6_addr)
@@ -34,8 +35,9 @@ struct io_sock_s {
 
 struct passive_peer_s {
     LIST_ENTRY(passive_peer_s) link;
-    struct addrinfo *addr_info;
+    struct addrinfo *addr_info;    
     NET_ADDR(addr);
+    char humanified_address[INET_ADDR_STRING_LEN];
 };
 
 typedef struct passive_peer_s passive_peer_t;
@@ -288,27 +290,21 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
 
 int do_peer_reset = 0;
 
-static void setup_outbount_connection(io_ctx_t *ctx, struct addrinfo *r, const char *peer, const char *host_buff, const char *port_buff) {
+static int setup_outbount_connection(passive_peer_t *peer) {
+    struct addrinfo *r = peer->addr_info;
     int c_fd = socket(r->ai_family, r->ai_socktype, r->ai_protocol);
     if (c_fd < 0) {
         log_warn("io", L("could not create socket for connecting to peer: %s"), peer);
     } else {
-        int connected = (connect(c_fd, res->ai_addr, res->ai_addrlen) == 0);
-        if (! connected) {
+        if (connect(c_fd, r->ai_addr, r->ai_addrlen) == 0) {
             log_info("io", L("connnected as client to peer: %s"), peer);
-            io_sock_t *sock;
-            if (add_sock(ctx, c_fd, conn, connected, &sock) == 0) {
-                sock->d.conn.peer_host = strdup(host_buff);
-                sock->d.conn.peer_port = atoi(port_buff);                            
-            } else {
-                log_warn("io", L("failed to setup state for connection to peer: %s [%s:%s], will try later"), peer, host_buff, port_buff);
-                close(c_fd);
-            }
         } else {
-            log_warn("io", L("could not connect to peer: %s [%s:%s], will retry later"), peer, host_buff, port_buff);
+            log_warn("io", L("failed to setup state for connection to peer: %s [%s:%s], will try later"), peer, host_buff, port_buff);
             close(c_fd);
+            return -1;
         }
     }
+    return c_fd;
 }
 
 static inline passive_peer_t *create_passive_peer(struct addrinfo r, uint8_t *nw_addr) {
@@ -316,6 +312,9 @@ static inline passive_peer_t *create_passive_peer(struct addrinfo r, uint8_t *nw
     if (pp == NULL) return NULL;
     pp->addr_info = r;
     memcpy(pp->addr, nw_addr, MAX_NW_ADDR_LEN);
+    if (inet_ntop(pp->addr_info->ai_family, pp->addr, pp->humanified_address, INET_ADDR_STRING_LEN) == NULL) {
+        log_warn("io", L("Failed to copy human-readable addr for endpoint"));
+    }
     return pp;
 }
 
@@ -437,12 +436,45 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
     fclose(f);
 }
 
-void connect_and_add_passive_peer(passive_peer_t *peer) {
-    
+void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
+    passive_peer_t *peer_copy = create_passive_peer(peer->addr_info, peer->addr);
+    if (peer_copy == NULL) {
+        log_warn("io", L("Failed to allocate passive-peer (copy) for address %s adding to io-ctx"), peer->humanified_address);
+        return;
+    }
+    if (batab_put(&ctx->passive_peers, peer_copy, NULL) != 0) {
+        log_warn("io", L("Failed to add passive-peer %s to io-ctx"), peer_copy->humanified_address);
+        free(peer_copy);
+    }
+    int fd = setup_outbount_connection(peer);
+    if (fd < 0) {
+        log_warn("io", L("Failed to setup connection to peer: %s, adding disconnected"), peer_copy->humanified_address);
+        LIST_INSERT_HEAD(&ctx->disconnected_passive_peers, peer_copy, link);
+        peer->addr_info = NULL; /* so it doesn't get free'd */
+    } else {
+        io_sock_t *sock;
+        if (add_sock(ctx, fd, conn, 1, &sock) == 0) {
+            memcpy(sock->d.conn.peer, peer_copy->addr, MAX_NW_ADDR_LEN);
+            sock->d.conn.outbound = 1;
+            peer->addr_info = NULL;
+        } else {
+            log_warn("io", L("Failed to add passive-peer %s socket to io-ctx"), peer_copy->humanified_address);
+            close(fd);
+            free(peer_copy);
+        }
+    }
 }
 
-void disconnect_and_discard_passive_peer(passive_peer_t *peer) {
-    
+void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
+    io_sock_t *sock = batab_get(&ctx->live_sockets, peer->addr);
+    if (sock == NULL) {
+        passive_peer_t *pp = batab_get(&ctx->passive_peers, peer->addr);
+        assert(pp != NULL);
+        LIST_REMOVE(pp, link);
+        assert(batab_remove(&ctx->passive_peers, peer->addr) == 0);
+    } else {
+        destroy_sock(sock);
+    }
 }
 
 void trigger_peer_reset() {
