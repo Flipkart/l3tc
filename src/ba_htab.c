@@ -91,8 +91,9 @@ int batab_put(batab_t *tab, void *new_value, void **old_value) {
     return _batab_put(tab, new_value);
 }
 
-void batab_remove(batab_t *tab, uint8_t *key) {
+int batab_remove(batab_t *tab, uint8_t *key) {
     batab_entry_t *e = _batab_get(tab, key);
-    if (e == NULL) return;
+    if (e == NULL) return -1;
     _batab_del_entry(tab, e, 1);
+    return 0;
 }

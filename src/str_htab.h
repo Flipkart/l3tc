@@ -19,6 +19,7 @@ struct shtab_s {
     shtab_entry_t *t;
     char *name;
     value_destructor_t *val_destructor;
+    shtab_entry_t *tmp;
 };
 typedef struct shtab_s shtab_t;
 
@@ -32,7 +33,7 @@ void shtab_remove(shtab_t *tab, char *key);
 
 int shtab_put(shtab_t *tab, char *key, void *new_value, void **old_value);
 
-#define shtab_foreach_do(tab, e)                                 \
-    for(e = tab->t; e != NULL; e=(shtab_entry_t*)(e->hh.next))
+#define shtab_foreach_do(tab, e)                \
+    HASH_ITER(hh, tab->t, e, tab->tmp)
 
 #endif

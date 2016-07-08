@@ -45,7 +45,8 @@ static void usage(void) {
 	fprintf(stderr, " -v, --version                            print version and exit\n");
     fprintf(stderr, " -l, --listenerPort  <port>               listener port (should be the same value across all peers)\n");
     fprintf(stderr, " -p, --peerList  <path>                   path to file containing list of peers (IP v4/v6 addresses or hostnames)\n");
-    fprintf(stderr, " -s, --selfAddress  <addr>                hosts own address as seen by peers (IP v4/v6 addresses or hostname)\n");
+    fprintf(stderr, " -4, --selfIpv4  <addr>                   hosts own address as seen by peers (IP v4)\n");
+    fprintf(stderr, " -6, --selfIpv6  <addr>                   hosts own address as seen by peers (IP v6)\n");
     fprintf(stderr, " -c, --compLvl  <compression-level>       Compression level between (0: none, 1: fast ... 9: best)\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
@@ -55,7 +56,8 @@ int main(int argc, char *argv[]) {
 	int debug = 1;
 	int ch;
     char *peer_file = NULL;
-    char *self_addr = NULL;
+    char *self_addr_v4 = NULL;
+    char *self_addr_v6 = NULL;
     int compression_level = DEFAULT_COMPRESSION_LEVEL;
     int listener_port = 15;
 
@@ -65,13 +67,14 @@ int main(int argc, char *argv[]) {
                 { "help",  no_argument, 0, 'h' },
                 { "version", no_argument, 0, 'v' },
                 { "peerList", required_argument, 0, 'p' },
-                { "selfAddress", required_argument, 0, 's' },
+                { "selfIpv4", required_argument, 0, '4' },
+                { "selfIpv6", required_argument, 0, '6' },
                 { "listenerPort", required_argument, 0, 'l' },
                 { "compLvl", required_argument, 0, 'c' },
                 { 0 }};
 	while (1) {
 		int option_index = 0;
-		ch = getopt_long(argc, argv, "hvdD:l:c:p:s:",
+		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:",
 		    long_options, &option_index);
 		if (ch == -1) break;
 		switch (ch) {
@@ -93,9 +96,13 @@ int main(int argc, char *argv[]) {
             assert(peer_file == NULL);
             peer_file = strndup(optarg, MAX_FILE_PATH_LEN);
 			break;
-		case 's':
-            assert(self_addr == NULL);
-            self_addr = strndup(optarg, MAX_ADDR_LEN);
+		case '4':
+            assert(self_addr_v4 == NULL);
+            self_addr_v4 = strndup(optarg, MAX_ADDR_LEN);
+			break;
+		case '6':
+            assert(self_addr_v6 == NULL);
+            self_addr_v6 = strndup(optarg, MAX_ADDR_LEN);
 			break;
 		case 'c':
 			compression_level = atoi(optarg);
@@ -118,8 +125,8 @@ int main(int argc, char *argv[]) {
         error = "Peer file not found";
     }
 
-    if ((! error) && self_addr == NULL) {
-        error = "Self address not provided";
+    if ((! error) && (self_addr_v4 == NULL && self_addr_v6 == NULL)) {
+        error = "Self address not provided, please provide either v4 or v6 or both.";
     }
 
     int tun_fd;
@@ -136,7 +143,8 @@ int main(int argc, char *argv[]) {
     /*         error = "io loop failed"; */
     /* } */
 
-    free(self_addr);
+    free(self_addr_v4);
+    free(self_addr_v6);
     free(peer_file);
     if (tun_fd > 0)
         close(tun_fd);

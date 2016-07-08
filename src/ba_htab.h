@@ -23,6 +23,7 @@ struct batab_s {
     unsigned key_len;
     value_destructor_t *val_destructor;
     char *print_buf;
+    batab_entry_t *tmp;
 };
 typedef struct batab_s batab_t;
 
@@ -32,11 +33,11 @@ void batab_destory(batab_t *tab);
 
 void *batab_get(batab_t *tab, uint8_t *key);
 
-void batab_remove(batab_t *tab, uint8_t *key);
+int batab_remove(batab_t *tab, uint8_t *key);
 
 int batab_put(batab_t *tab, void *new_value, void **old_value);
 
-#define batab_foreach_do(tab, e)                                \
-    for(e = tab->t; e != NULL; e=(batab_entry_t*)(e->hh.next))
+#define batab_foreach_do(tab, e)                \
+    HASH_ITER(hh, tab->t, e, tab->tmp)
 
 #endif

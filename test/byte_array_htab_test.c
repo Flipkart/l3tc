@@ -198,7 +198,7 @@ void test_with_complex_dynamically_allocated_values() {
 
     memset(key, 0, KEY_LEN);
     strcpy(key, "TWO");
-    batab_remove(&tab, key);
+    assert(batab_remove(&tab, key) == 0);
     assert(batab_get(&tab, key) == NULL);
 
     memset(key, 0, KEY_LEN);
@@ -207,12 +207,46 @@ void test_with_complex_dynamically_allocated_values() {
 
     memset(key, 0, KEY_LEN);
     strcmp(key, "quux");
-    batab_remove(&tab, key); /* a key that does not exist */
+    assert(batab_remove(&tab, key) == -1); /* a key that does not exist */
     
+    batab_destory(&tab);
+}
+
+void test_deletion_while_iterating() {
+    F *one = calloc(1, sizeof(F));
+    strcpy(one->key, "ONE");
+    one->label = 1;
+    one->next = calloc(1, sizeof(F));
+    strcpy(one->next->key, "NEXT of ONE");
+    one->next->next = NULL;
+
+    F *two = calloc(1, sizeof(F));
+    strcpy(two->key, "TWO");
+    two->label = 2;
+    two->next = NULL;
+
+    batab_t tab;
+
+    assert(batab_init(&tab, offsetof(F, key), KEY_LEN, foo_destructor, "test-tab") == 0);
+
+    assert(batab_put(&tab, one, NULL) == 0);
+    assert(batab_put(&tab, two, NULL) == 0);
+
+    batab_entry_t *e;
+    
+    batab_foreach_do((&tab), e) {
+        assert(batab_remove(&tab, ((F*)e->value)->key) == 0);
+    }
+
+    int c = 0;
+    batab_foreach_do((&tab), e) c++;
+    assert(c == 0);
+
     batab_destory(&tab);
 }
 
 int main() {
     test_with_statically_allocated_values();
     test_with_complex_dynamically_allocated_values();
+    test_deletion_while_iterating();
 }
