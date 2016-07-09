@@ -11,8 +11,19 @@
 
 #define MAX_NW_ADDR_LEN ((IPv6_ADDR_LEN > IPv4_ADDR_LEN) ? IPv6_ADDR_LEN : IPv4_ADDR_LEN)
 
+#define TUN_RING_SZ 4*1024*1024; /* 4 MB */
+#define CONN_RING_SZ 16*1024; /* 16 KB */
+
 typedef struct io_ctx_s io_ctx_t;
 typedef struct io_sock_s io_sock_t;
+
+typedef struct ring_buff_s ring_buff_t;
+
+struct ring_buff_s {
+    void *buff;
+    size_t sz, start, end;
+    int drained;
+};
 
 struct io_sock_s {
     LIST_ENTRY(io_req_s) link;
@@ -29,7 +40,11 @@ struct io_sock_s {
         struct {
             uint8_t peer[MAX_NW_ADDR_LEN];
             int outbound;
+            ring_buff_t rx_bl, tx_bl;
         } conn;
+        struct {
+            ring_buff_t tx_bl;
+        } tun;
     } d;
 };
 
@@ -60,24 +75,30 @@ struct io_ctx_s {
     int using_af;
 };
 
+static inline void destroy_ring_buff(ring_buff_t *ring) {
+    free(ring->buff);
+}
+
 static inline void destroy_sock(io_sock_t *sock) {
     if (NULL == sock) return;
     log_debug("io", L("destroying socket of type: %d (fd: %d)"), sock->typ, sock->fd);
 
-    if (sock->typ == conn) {
+    if (conn == sock->typ) {
         drop_conn_route(sock);
     }
     
     if (epoll_ctl(sock->ctx, EPOLL_CTL_DEL, sock->fd, NULL)) {
         log_warn("io", L("removal from epoll context for fd: %d failed"), sock->fd);
     }
+    if (conn == sock->typ) {
+        destroy_conn_sock_data(sock);
+    } else if (tun == sock->typ) {
+        destroy_tun_sock_data(sock);
+    }
+
     if (sock->fd > 0) {
         close(sock->fd);
         sock->fd = -1;
-    }
-
-    if (sock->typ == conn) {
-        destroy_conn_sock_data(sock);
     }
 
     LIST_REMOVE(sock, link);
@@ -137,6 +158,22 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
         setup_conn_route(sock);
     }
 
+    return 0;
+}
+
+static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz) {
+    if (NULL == (rbuff->buff = malloc(sz))) {
+        return -1;
+    }
+    rbuff->sz = sz;
+    rbuff->start = rbuff->end = 0;
+}
+
+static int init_tun_tx_backlog_ring(io_sock_t *sock, void *ign) {
+    if (init_backlog_ring(&sock->d.tun.tx_bl, TUN_RING_SZ) != 0) {
+        log_crit("io", L("couldn't allocate tx-backlog ring for tun"));
+        return -1;
+    }
     return 0;
 }
 
@@ -201,6 +238,9 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
         destroy_io_ctx(ctx);
         return null;
     }
+    if (add_sock(ctx, tun_fd, tun, init_tun_tx_backlog_ring, NULL) != 0) {
+        log_crit("io", L("Couldn't add tun to io-ctx"));
+    }
     return ctx;
 }
 
@@ -226,15 +266,18 @@ static inline void destroy_conn_sock_data(io_sock_t *sock) {
     assert(sock->typ == conn);
     if (sock->fd >= 0) {
         assert(batab_remove(&ctx->live_sockets, &sock->d.conn.peer) == 0);
-    }
-    if (sock->d.conn.outbound) {
-        passive_peer_t *pp = batab_get(&ctx->passive_peers, &sock->d.conn.peer);
-        assert(pp != NULL);
-        if (sock->fd < 0) {
-            LIST_REMOVE(pp, link);
+        if (sock->d.conn.outbound) {
+            passive_peer_t *pp = batab_get(&ctx->passive_peers, addr);
+            assert(pp != NULL);
+            LIST_INSERT_HEAD(&ctx->disconnected_passive_peers, pp, link);
         }
-        assert(batab_remove(&ctx->passive_peers, &sock->d.conn.peer) == 0);
     }
+    destroy_ring_buff(&sock->d.conn.tx_bl);
+    destroy_ring_buff(&sock->d.conn.rx_bl);
+}
+
+static inline void destroy_tun_sock_data(io_sock_t *sock) {
+    destroy_ring_buff(&sock->d.tun.tx_bl);
 }
 
 static int setup_listener(io_ctx_t *ctx, int listener_port) {
@@ -462,6 +505,14 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
 
 static int init_conn_sock(io_sock_t *sock, uint8_t *peer_addr) {
     memcpy(sock->d.conn.peer, peer_addr, MAX_NW_ADDR_LEN);
+    if (init_backlog_ring(&sock->d.conn.tx_bl, CONN_RING_SZ) != 0) {
+        log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
+        return -1;
+    }
+    if (init_backlog_ring(&sock->d.conn.rx_bl, CONN_RING_SZ) != 0) {
+        log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
+        return -1;
+    }
     return 0;
 }
 
@@ -481,32 +532,27 @@ void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
     if (batab_put(&ctx->passive_peers, peer_copy, NULL) != 0) {
         log_warn("io", L("Failed to add passive-peer %s to io-ctx"), peer_copy->humanified_address);
         free(peer_copy);
+        return;
     }
     int fd = setup_outbount_connection(peer);
+    if (fd >= 0 && add_sock(ctx, fd, conn, init_out_conn_sock, peer) != 0) {
+        log_warn("io", L("Failed to add passive-peer %s socket to io-ctx"), peer_copy->humanified_address);
+        fd = -1;
+    }
     if (fd < 0) {
         log_warn("io", L("Failed to setup connection to peer: %s, adding disconnected"), peer_copy->humanified_address);
         LIST_INSERT_HEAD(&ctx->disconnected_passive_peers, peer_copy, link);
         peer->addr_info = NULL; /* so it doesn't get free'd */
-    } else {
-        io_sock_t *sock;
-        if (add_sock(ctx, fd, conn, &sock, init_out_conn_sock, peer) != 0) {
-            log_warn("io", L("Failed to add passive-peer %s socket to io-ctx"), peer_copy->humanified_address);
-            close(fd);
-            free(peer_copy);
-        }
     }
 }
 
 void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
     io_sock_t *sock = batab_get(&ctx->live_sockets, peer->addr);
-    if (sock == NULL) {
-        passive_peer_t *pp = batab_get(&ctx->passive_peers, peer->addr);
-        assert(pp != NULL);
-        LIST_REMOVE(pp, link);
-        assert(batab_remove(&ctx->passive_peers, peer->addr) == 0);
-    } else {
-        destroy_sock(sock);
-    }
+    if (sock != NULL) destroy_sock(sock);
+    passive_peer_t *pp = batab_get(&ctx->passive_peers, peer->addr);
+    assert(pp != NULL);
+    LIST_REMOVE(pp, link);
+    assert(batab_remove(&ctx->passive_peers, peer->addr) == 0);
 }
 
 void trigger_peer_reset() {
@@ -546,11 +592,74 @@ static inline int do_accept(io_sock_t *listener_sock) {
     return 1;
 }
 
+static inline void tun_io(io_sock_t *tun) {
+    
+}
+
+static inline size_t backlog(ring_buff_t *r) {
+    
+    if (fw_bl > 0) return fw_bl;
+    else return (r->sz - r->start) + r->end;
+}
+
+#define CONN_IO_OK 0
+#define CONN_IO_OK_FULL 1
+#define CONN_KILL -1
+
+static inline int send_bl_batch(int fd, void *buff, size_t len, size_t *start) {
+    size_t sent = send(fd, buff, len, MSG_NOSIGNAL);
+    int full = 0;
+    if (sent < 0) {
+        full = (errno == EAGAIN || errno == EWOULDBLOCK);
+        if (! full) {
+            if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE) {
+                return CONN_KILL;
+            }
+        }
+        return CONN_IO_OK_FULL;
+    } else {
+        start += size;
+        return CONN_IO_OK;
+    }
+}
+
+static inline int send_bl(int fd, ring_buff_t *r) {
+    if (r->sz == r->start) r->start = 0;
+    size_t fw_bl = (r->end - r->start);
+    if (fw_bl == 0) return;
+
+    if (fw_bl > 0) {
+        int ret = send_bl_batch(fd, r->buff + r->start, fw_bl, &r->start);
+        r->drained = ((ret == CONN_IO_OK) && ((r->end - r->start) == 0));
+        return ret;
+    } else {
+        fw_bl = (r->sz - r->start);
+        int ret = send_bl_batch(fd, r->buff + r->start, fw_bl, &r->start);
+        if ((ret == CONN_IO_OK) && ((r->sz - r->start) == 0)) {
+            r->start = 0;
+            r->drained = 0;
+            return send_bl(fd, r);
+        } else if (ret == CONN_IO_OK_FULL) {
+            r->drained = 0;
+        }
+        return ret;
+    }
+    
+}
+
+static inline void conn_io(uint32_t event, io_sock_t *conn) {
+    if ((event | EPOLLOUT) || conn->d.conn.tx.drained) {
+        if (send_bl(conn->fd, &conn->d.conn.tx) == CONN_KILL) {
+            destroy_sock(conn);
+        }
+    }
+}
+
 static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
     if (sock->typ == tun) {
-        
+        tun_io(sock);
     } else if (sock->typ == conn) {
-        
+        conn_io(event, sock);
     } else {
         assert(sock->typ == lstn);
         while(do_accept(sock));
