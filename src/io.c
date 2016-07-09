@@ -85,17 +85,42 @@ static inline void destroy_sock(io_sock_t *sock) {
     free(sock);
 }
 
-static inline int add_sock(io_ctx_t *ctx, int fd, int typ, int alive, io_sock_t **res) {
+static inline int set_no_block(int fd) {
+    int flags = 0;
+    if((flags = fcntl(fd, F_GETFL)) != -1) {
+		flags |= O_NONBLOCK;
+		flags = fcntl(fd, F_SETFL, flags);
+	}
+    return flags == -1 ? -1 : 0;
+}
+
+typedef int (type_specific_initializer_t)(io_sock_t *sock, void *ts_init_ctx);
+
+static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initializer_t *ts_init, void *ts_init_ctx) {
     log_debug("io", L("creating socket of type: %d (fd: %d)"), typ, fd);
-    if (res != NULL) *res = NULL;
+    if (set_no_block(fd) != 0) {
+        log_warn("io", L("failed to make socket non-blocking, rejecting socket %d"), fd);
+        close(fd);
+        return -1;
+    }
     io_sock_t *sock = calloc(1, sizeof(io_sock_t));
     if (sock == NULL) {
         log_warn("io", L("failed to allocate memory for listerner socket object, closing fd"));
         close(fd);
-        return NULL;
+        return -1;
     }
     sock->fd = fd;
     sock->ctx = ctx;
+    sock->typ = typ;
+
+    if (ts_init != NULL) {
+        if (ts_init(sock, ts_init_ctx) != 0) {
+            log_warn("io", L("could not successfully initialize type-specific context for fd: %d"), fd);
+            free(sock);
+            close(fd);
+            return -1;
+        }
+    }
 
     sock->evt.events = EPOLLIN|EPOLLOUT|EPOLLHUP|EPOLLET;
     sock->evt.data.ptr = sock;
@@ -112,7 +137,6 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, int alive, io_sock_t 
         setup_conn_route(sock);
     }
 
-    if (res != NULL) *res = sock;
     return 0;
 }
 
@@ -266,7 +290,7 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
 		}
 
 
-        if (add_sock(ctx, sock, lstn, 1, NULL) != 0) {
+        if (add_sock(ctx, sock, lstn, NULL, NULL) != 0) {
             log_warn("io", L("failed to add listener-socket"));
             close(sock);
             continue;
@@ -288,7 +312,8 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
     return 0;
 }
 
-int do_peer_reset = 0;
+static int do_peer_reset = 0;
+static int do_stop = 0;
 
 static int setup_outbount_connection(passive_peer_t *peer) {
     struct addrinfo *r = peer->addr_info;
@@ -307,7 +332,7 @@ static int setup_outbount_connection(passive_peer_t *peer) {
     return c_fd;
 }
 
-static inline passive_peer_t *create_passive_peer(struct addrinfo r, uint8_t *nw_addr) {
+static inline passive_peer_t *create_passive_peer(struct addrinfo *r, uint8_t *nw_addr) {
     passive_peer_t *pp = malloc(sizeof(passive_peer_t));
     if (pp == NULL) return NULL;
     pp->addr_info = r;
@@ -383,13 +408,13 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
                             NI_NUMERICHOST|NI_NUMERICSERV) != 0) {
                 log_warn("io", L("failed to get name-info for peer: %s"), peer);
             }
-            
+
+            memset(nw_addr, 0, MAX_NW_ADDR_LEN);
             switch (r->ai_family) {
             case AF_INET:
                 if (ctx->using_af | USING_IPV4) {
                     void *client_addr = (void *)&((struct sockaddr_in *) r->ai_addr)->sin_addr;
                     if (memcmp(client_addr, ctx->self_v4, IPv4_ADDR_LEN) > 0) {
-                        memset(nw_addr, 0, MAX_NW_ADDR_LEN);
                         memcpy(nw_addr, client_addr, IPv4_ADDR_LEN);
                         encountered_failure = capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
                     }
@@ -399,7 +424,6 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
                 if (ctx->using_af | USING_IPV6) {
                     void *client_addr = (void *)&((struct sockaddr_in6 *) r->sin6_addr)->s6_addr;
                     if (memcmp(client_addr, ctx->self_v6, IPv6_ADDR_LEN) > 0) {
-                        memset(nw_addr, 0, MAX_NW_ADDR_LEN);
                         memcpy(nw_addr, client_addr, IPv6_ADDR_LEN);
                         encountered_failure = capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
                     }
@@ -436,6 +460,18 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
     fclose(f);
 }
 
+static int init_conn_sock(io_sock_t *sock, uint8_t *peer_addr) {
+    memcpy(sock->d.conn.peer, peer_addr, MAX_NW_ADDR_LEN);
+    return 0;
+}
+
+static int init_out_conn_sock(io_sock_t *sock, passive_peer_t *peer) {
+    sock->d.conn.outbound = 1;
+    int ret = init_conn_sock(sock, peer->addr);
+    sock->d.conn.outbound = 1;
+    peer->addr_info = NULL;
+}
+
 void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
     passive_peer_t *peer_copy = create_passive_peer(peer->addr_info, peer->addr);
     if (peer_copy == NULL) {
@@ -453,11 +489,7 @@ void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
         peer->addr_info = NULL; /* so it doesn't get free'd */
     } else {
         io_sock_t *sock;
-        if (add_sock(ctx, fd, conn, 1, &sock) == 0) {
-            memcpy(sock->d.conn.peer, peer_copy->addr, MAX_NW_ADDR_LEN);
-            sock->d.conn.outbound = 1;
-            peer->addr_info = NULL;
-        } else {
+        if (add_sock(ctx, fd, conn, &sock, init_out_conn_sock, peer) != 0) {
             log_warn("io", L("Failed to add passive-peer %s socket to io-ctx"), peer_copy->humanified_address);
             close(fd);
             free(peer_copy);
@@ -481,11 +513,69 @@ void trigger_peer_reset() {
     do_peer_reset = 1;
 }
 
+void trigger_io_loop_stop() {
+    do_stop = 1;
+}
+
+static inline int do_accept(io_sock_t *listener_sock) {
+    sockaddr remote_addr;
+    socklen_t remote_addr_len;
+    NET_ADDR(nw_addr);
+    int conn_fd = accept(listener_sock, &remote_addr, &remote_addr_len);
+    if (conn_sock == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EMFILE) return 0;
+        log_warn("io", L("failed to accept socket"));
+    }
+    memset(nw_addr, 0, MAX_NW_ADDR_LEN);
+    switch (remote_addr.sa_family) {
+    case AF_INET:
+        void *client_addr = (void *)&((struct sockaddr_in *) r->ai_addr)->sin_addr;
+        memcpy(nw_addr, client_addr, IPv4_ADDR_LEN);
+        break;
+    case AF_INET6:
+        void *client_addr = (void *)&((struct sockaddr_in6 *) r->sin6_addr)->s6_addr;
+        memcpy(nw_addr, client_addr, IPv6_ADDR_LEN);
+        break;
+    default:
+        log_warn("io", L("Encountered unexpected address-family: %d in inbound socket"), remote_addr.ai_family);
+    }
+    
+    if (add_sock(sock->ctx, conn_fd, conn, init_conn_sock, client_addr) != 0) {
+        log_warn("io", L("Couldn't plug inbound socket into io-ctx"));
+    }
+    return 1;
+}
+
+static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
+    if (sock->typ == tun) {
+        
+    } else if (sock->typ == conn) {
+        
+    } else {
+        assert(sock->typ == lstn);
+        while(do_accept(sock));
+    }
+}
+
+#define MAX_POLLED_EVENTS 256
+
 int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port) {
     io_ctx_t *ctx;
     if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
+            int num_evts;
+            struct epoll_event evts[MAX_POLLED_EVENTS];
+            while ( ! do_stop) {
+                num_evts = epoll_wait(epollfd, evts, MAX_POLLED_EVENTS, -1);
+                if (num_evts < 0) {
+                    log_warn("io", L("io-poll failed"));
+                } else {
+                    for (int i = 0; i < num_evts; i++) {
+                        handle_io_evt(evts[i].events, (io_sock_t *) evts[i].data.ptr);
+                    }
+                }
+            }
             //reset_peers(ctx, peer_file_path, self_addr, listener_port);
 
             
