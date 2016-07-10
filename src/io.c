@@ -21,8 +21,8 @@ typedef struct ring_buff_s ring_buff_t;
 
 struct ring_buff_s {
     void *buff;
-    size_t sz, start, end;
-    int drained;
+    ssize_t sz, start, end;
+    int wraped;
 };
 
 struct io_sock_s {
@@ -167,6 +167,7 @@ static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz) {
     }
     rbuff->sz = sz;
     rbuff->start = rbuff->end = 0;
+    rbuff->wraped = 0;
 }
 
 static int init_tun_tx_backlog_ring(io_sock_t *sock, void *ign) {
@@ -596,60 +597,85 @@ static inline void tun_io(io_sock_t *tun) {
     
 }
 
-static inline size_t backlog(ring_buff_t *r) {
-    
-    if (fw_bl > 0) return fw_bl;
-    else return (r->sz - r->start) + r->end;
-}
-
 #define CONN_IO_OK 0
 #define CONN_IO_OK_FULL 1
 #define CONN_KILL -1
 
-static inline int send_bl_batch(int fd, void *buff, size_t len, size_t *start) {
-    size_t sent = send(fd, buff, len, MSG_NOSIGNAL);
+static inline int send_bl_batch(int fd, void *buff, size_t len, ssize_t *start, void *ignore) {
+    ssize_t sent = send(fd, buff, len, MSG_NOSIGNAL);
     int full = 0;
     if (sent < 0) {
-        full = (errno == EAGAIN || errno == EWOULDBLOCK);
-        if (! full) {
-            if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE) {
-                return CONN_KILL;
-            }
-        }
-        return CONN_IO_OK_FULL;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return CONN_IO_OK_FULL;
+        if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE) return CONN_KILL;
     } else {
-        start += size;
+        start += sent;
         return CONN_IO_OK;
     }
 }
 
-static inline int send_bl(int fd, ring_buff_t *r) {
-    if (r->sz == r->start) r->start = 0;
-    size_t fw_bl = (r->end - r->start);
-    if (fw_bl == 0) return;
+typedef int (io_handler_fn_t)(int fd, void *buff, size_t len, ssize_t *tracker, void *hdlr_ctx);
 
-    if (fw_bl > 0) {
-        int ret = send_bl_batch(fd, r->buff + r->start, fw_bl, &r->start);
-        r->drained = ((ret == CONN_IO_OK) && ((r->end - r->start) == 0));
-        return ret;
-    } else {
-        fw_bl = (r->sz - r->start);
-        int ret = send_bl_batch(fd, r->buff + r->start, fw_bl, &r->start);
-        if ((ret == CONN_IO_OK) && ((r->sz - r->start) == 0)) {
-            r->start = 0;
-            r->drained = 0;
-            return send_bl(fd, r);
-        } else if (ret == CONN_IO_OK_FULL) {
-            r->drained = 0;
+static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, void *hdlr_ctx) {
+    int ret = CONN_IO_OK;
+    do {
+        if (r->wraped) {
+            if (r->sz == r->start) {
+                r->start = 0;
+                r->wraped = 0;
+                continue;
+            }
+            ret = io_hdlr(fd, r->buff + r->start, r->sz - r->start, &r->start, hdlr_ctx);
+        } else {
+            if (r->end == r->start) break;
+            ret = io_hdlr(fd, r->buff + r->start, r->end - r->start, &r->start, hdlr_ctx);
         }
-        return ret;
+    } while(CONN_IO_OK == ret);
+    return ret;
+}
+
+static inline int recv_batch(int fd, void *buff, size_t max_sz, size_t *end, void *ign) {
+    ssize_t rcvd = recv(fd, buff, max_sz, 0);
+    int full = 0;
+    if (rcvd == 0) {
+        return CONN_KILL;
     }
-    
+    if (rcvd < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return CONN_IO_OK_FULL;
+        if (errno == ECONNREFUSED || errno == ENOTCONN) return CONN_KILL;
+    } else {
+        end += rcvd;
+        return CONN_IO_OK;
+    }
+}
+
+static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, void *hdlr_ctx) {
+    int ret = CONN_IO_OK;
+    do {
+        if (r->wraped) {
+            if (r->start == r->end) break;
+            ret = io_hdlr(fd, r->buff + r->end, r->start - r->end, &r->end, hdlr_ctx);
+        } else {
+            if (r->sz == r->end) {
+                r->end = 0;
+                r->wraped = 1;
+                continue;
+            }
+            ret = io_hdlr(fd, r->buff + r->end, r->sz - r->end, &r->end);
+        }
+    } while(CONN_IO_OK == ret);
+    return ret;
 }
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
-    if ((event | EPOLLOUT) || conn->d.conn.tx.drained) {
-        if (send_bl(conn->fd, &conn->d.conn.tx) == CONN_KILL) {
+    if (event | EPOLLOUT) {
+        if (CONN_KILL == drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL)) {
+            log_warn("io", L("Send failed, connection is being dropped for sock: %d"), conn->fd); 
+            destroy_sock(conn);
+        }
+    }
+    if (event | EPOLLIN) {
+        if (CONN_KILL == fill_ring(conn->fd, &conn->d.conn.rx, recv_batch, &conn->ctx->tun_fd)) {
+            log_warn("io", L("Recv failed, connection id being dropped for sock: %d"), conn->fd);
             destroy_sock(conn);
         }
     }
