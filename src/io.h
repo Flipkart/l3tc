@@ -5,7 +5,10 @@
 #  include <config.h>
 #endif
 
-int io(int tun_fd, const char* peer_file_path, const char* self_addr, int listener_port);
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port);
 
-void reset_peers();
+void trigger_peer_reset();
+
+void trigger_io_loop_stop();
+
 #endif

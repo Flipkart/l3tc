@@ -12,7 +12,7 @@
 #define MAX_NW_ADDR_LEN ((IPv6_ADDR_LEN > IPv4_ADDR_LEN) ? IPv6_ADDR_LEN : IPv4_ADDR_LEN)
 
 #define TUN_RING_SZ 4*1024*1024; /* 4 MB, must be greater than 64kB for IPv4, need to check limits in IPv6 */
-#define CONN_RING_SZ 16*1024; /* 16 KB */
+#define CONN_RING_SZ 128*1024; /* 128 KB */
 
 typedef struct io_ctx_s io_ctx_t;
 typedef struct io_sock_s io_sock_t;
@@ -24,6 +24,13 @@ struct ring_buff_s {
     ssize_t sz, start, end;
     int wraped;
 };
+
+struct tun_pkt_buff_s {
+    void *buff;
+    ssize_t capacity, len, current_pkt_len;
+};
+
+typedef struct tun_pkt_buff_s tun_pkt_buff_t;
 
 struct io_sock_s {
     LIST_ENTRY(io_req_s) link;
@@ -40,10 +47,11 @@ struct io_sock_s {
         struct {
             uint8_t peer[MAX_NW_ADDR_LEN];
             int outbound;
-            ring_buff_t rx_bl, tx_bl;
+            ring_buff_t rx, tx;
         } conn;
         struct {
-            ring_buff_t tx_bl;
+            ring_buff_t tx;
+            tun_pkt_buff_t r_buff, w_buff;
         } tun;
     } d;
 };
@@ -63,6 +71,12 @@ typedef struct passive_peer_s passive_peer_t;
 #define NET_ADDR(field_name)                    \
     uint8_t field_name[MAX_NW_ADDR_LEN]
 
+struct io_ctr_s {
+    uint64_t b, p, drop_b, drop_p;
+};
+
+typedef struct io_ctr_s io_ctr_t;
+
 struct io_ctx_s {
     LIST_HEAD(all, io_sock_s) all_sockets;
     batab_t live_sockets; /* to passive and active peers */
@@ -73,7 +87,8 @@ struct io_ctx_s {
     NET_ADDR(self_v4);
     NET_ADDR(self_v6);
     int using_af;
-    ring_buff_t *tun_tx_bl;
+    ring_buff_t *tun_tx;
+    io_ctr_t c_tun_rx, c_tun_tx, c_world_rx, c_world_tx;
 };
 
 static inline void destroy_ring_buff(ring_buff_t *ring) {
@@ -171,14 +186,32 @@ static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz) {
     rbuff->wraped = 0;
 }
 
+#define INITIAL_TUN_PKT_BUFF_SZ 4096
+#define MAX_L3_PKT_SZ 0xFFFF /* check hop-by-hop stuff for IPv6, 0xFFFF will do for IPv4 though */
+
 static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
     assert(io_ctx != NULL);
     io_ctx_t *ctx = (io_ctx_t *) io_ctx;
-    if (init_backlog_ring(&sock->d.tun.tx_bl, TUN_RING_SZ) != 0) {
+    if (init_backlog_ring(&sock->d.tun.tx, TUN_RING_SZ) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for tun"));
         return -1;
     }
-    ctx->tun_tx_bl = &sock->d.tun.tx_bl;
+    if ((sock->d.tun.w_buff.buff = malloc(INITIAL_TUN_PKT_BUFF_SZ)) == NULL) {
+        log_crit("io", L("couldn't allocate write-pkt-buff for tun"));
+        destroy_ring_buff(&sock->d.tun.tx);
+        return -1;
+    }
+    if ((sock->d.tun.r_buff.buff = malloc(MAX_L3_PKT_SZ)) == NULL) {
+        log_crit("io", L("couldn't allocate read-pkt-buff for tun"));
+        free(sock->d.tun.w_buff.buff);
+        destroy_ring_buff(&sock->d.tun.tx);
+        return -1;
+    }
+    sock->d.tun.r_buff.capacity = sock->d.tun.w_buff.capacity = INITIAL_TUN_WRITE_BUFF_SZ;
+    sock->d.tun.r_buff.len = sock->d.tun.w_buff.len = 0;
+    sock->d.tun.r_buff.current_pkt_len = sock->d.tun.w_buff.current_pkt_len = 0;
+    
+    ctx->tun_tx = &sock->d.tun.tx;
     return 0;
 }
 
@@ -277,12 +310,14 @@ static inline void destroy_conn_sock_data(io_sock_t *sock) {
             LIST_INSERT_HEAD(&ctx->disconnected_passive_peers, pp, link);
         }
     }
-    destroy_ring_buff(&sock->d.conn.tx_bl);
-    destroy_ring_buff(&sock->d.conn.rx_bl);
+    destroy_ring_buff(&sock->d.conn.tx);
+    destroy_ring_buff(&sock->d.conn.rx);
 }
 
 static inline void destroy_tun_sock_data(io_sock_t *sock) {
-    destroy_ring_buff(&sock->d.tun.tx_bl);
+    destroy_ring_buff(&sock->d.tun.tx);
+    free(&sock->d.tun.w_buff.buff);
+    free(&sock->d.tun.r_buff.buff);
 }
 
 static int setup_listener(io_ctx_t *ctx, int listener_port) {
@@ -409,7 +444,7 @@ int capture_passive_peer(batab_t *tab, uint8_t *nw_addr, struct addrinfo *r, con
     return 0;
 }
 
-static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* self_addr, int expected_port) {
+static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_port) {
     char peer[MAX_ADDR_LEN];
     char host_buff[MAX_ADDR_LEN];
     char port_buff[8];
@@ -461,7 +496,7 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
             switch (r->ai_family) {
             case AF_INET:
                 if (ctx->using_af | USING_IPV4) {
-                    void *client_addr = (void *)&((struct sockaddr_in *) r->ai_addr)->sin_addr;
+                    void *client_addr = (void *)&((struct sockaddr_in *) r->sin_addr)->s_addr;
                     if (memcmp(client_addr, ctx->self_v4, IPv4_ADDR_LEN) > 0) {
                         memcpy(nw_addr, client_addr, IPv4_ADDR_LEN);
                         encountered_failure = capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
@@ -506,15 +541,17 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, const char* se
     batab_destory(&updated_passive_peers);
 
     fclose(f);
+
+    return 0;
 }
 
 static int init_conn_sock(io_sock_t *sock, uint8_t *peer_addr) {
     memcpy(sock->d.conn.peer, peer_addr, MAX_NW_ADDR_LEN);
-    if (init_backlog_ring(&sock->d.conn.tx_bl, CONN_RING_SZ) != 0) {
+    if (init_backlog_ring(&sock->d.conn.tx, CONN_RING_SZ) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
-    if (init_backlog_ring(&sock->d.conn.rx_bl, CONN_RING_SZ) != 0) {
+    if (init_backlog_ring(&sock->d.conn.rx, CONN_RING_SZ) != 0) {
         log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
@@ -580,7 +617,7 @@ static inline int do_accept(io_sock_t *listener_sock) {
     memset(nw_addr, 0, MAX_NW_ADDR_LEN);
     switch (remote_addr.sa_family) {
     case AF_INET:
-        void *client_addr = (void *)&((struct sockaddr_in *) r->ai_addr)->sin_addr;
+        void *client_addr = (void *)&((struct sockaddr_in *) r->sin_addr)->s_addr;
         memcpy(nw_addr, client_addr, IPv4_ADDR_LEN);
         break;
     case AF_INET6:
@@ -597,13 +634,11 @@ static inline int do_accept(io_sock_t *listener_sock) {
     return 1;
 }
 
-static inline void tun_io(io_sock_t *tun) {
-    
-}
-
 #define CONN_IO_OK 0
 #define CONN_IO_OK_EXHAUSTED 1
 #define CONN_KILL -1
+#define CONN_UNKNOWN_ERR -2
+#define CONN_IO_OK_NOT_ENOUGH_SPACE -3
 
 static inline int send_bl_batch(int fd, void *buff, size_t len, ssize_t *start, void *ignore) {
     ssize_t sent = send(fd, buff, len, MSG_NOSIGNAL);
@@ -750,7 +785,7 @@ static int playback_tun_write_buf(int ignore_fd, void *playback_target_buff, ssi
     return CONN_IO_OK_EXHAUSTED;
 }
 
-static inline ssize_t push_to_tun_backlog_ring(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2, int *full) {
+static inline ssize_t push_pkt_to_tun_backlog_ring(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2, int *full) {
     tun_write_buff_t tun_write_buf = {b1, len1, b2, len2};
     fill_ring(-1, tun_tx->backlog, playback_tun_write_buf, NULL, &tun_write_buf);
     ssize_t total = len1 + len2;
@@ -763,35 +798,39 @@ static inline ssize_t push_to_tun_backlog_ring(tun_tx_t *tun_tx, void *b1, ssize
     return total;
 }
 
-static inline ssize_t push_to_tun_or_ring(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2, int *full) {
-    ssize_t written_overall = 0;
-    while((len1 + len2) > 0) {
-        void *b;
-        ssize_t *len;
-        if (len1 > 0) {
-            b = b1;
-            len = &len1;
-        } else if(len2 > 0) {
-            b = b2;
-            len = &len2;
-        }
-        if (ring_empty(tun_tx->backlog)) {
-            ssize_t written += write(tun_tx->fd, b, *len);
-            if (written < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    return push_to_tun_backlog_ring(tun_tx, b1, len1, b2, len2, full);
-                }
-                log_warn("io", L("Failed to write to tun %d bytes from buff %p"), len, b);
-                return 0;
+static inline ssize_t push_pkt_to_tun_or_ring(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2, int *full) {
+    if (ring_empty(tun_tx->backlog)) {
+        struct iovec out[2] = {b1, len1, b2, len2};
+        ssize_t written = writev(tun_tx->fd, out, 2);
+        if (written < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                return push_pkt_to_tun_backlog_ring(tun_tx, b1, len1, b2, len2, full);
             }
-            written_overall += written;
-            *len -= written;
+            log_warn("io", L("Failed to write to tun %d and %d bytes from buff %p and %p"), len1, len2, b1, b2);
+            return 0;
         } else {
-            return push_to_tun_backlog_ring(tun_tx, b1, len1, b2, len2, full);
+            assert(written == len1 + len2);
+            return written;
         }
+    } else {
+        return push_pkt_to_tun_backlog_ring(tun_tx, b1, len1, b2, len2, full);
     }
-
 }
+
+#define PARSE_L3_PACKET_LEN(pkt_len, b1, len1, b2, len2)    \
+    do {                                                    \
+        if (len1 >= 4) {                                    \
+            pkt_len = *((uint16_t *) b1 + 1);               \
+        } else if (len1 == 3 && len2 >= 1) {                \
+            pkt_len = (*((uint8_t *) b1 + 2)) << 8;         \
+            pkt_len |= *(uint8_t *) b2;                     \
+        } else if (len1 <= 2 && (len1 + len2) >= 4) {       \
+            pkt_len = *(uint16_t *) b2;                     \
+        } else {                                            \
+            pkt_len = -1;                                   \
+        }                                                   \
+        pkt_len = ntohs(pkt_len);                           \
+    } while (0);
 
 static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2) {
     assert(len1 > 0);
@@ -802,34 +841,26 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
 
     do {
         uint16_t pkt_len;
-        if (len1 >= 4) {
-            pkt_len = *((uint16_t *) b1 + 1);
-        } else if (len1 == 3 && len2 >= 1) {
-            pkt_len = (*((uint8_t *) b1 + 2)) << 8;
-            pkt_len |= *(uint8_t *) b2;
-        } else if (len1 <= 2 && (len1 + len2) >= 4) {
-            pkt_len = *(uint16_t *) b2;
-        } else {
-            return 0;
-        }
-        pkt_len = ntohs(pkt_len);
+        PARSE_L3_PACKET_LEN(pkt_len, b1, len1, b2, len2);
 
-        if ((len1 + len2) < pkt_len) {
+        if ((pkt_len == -1) || ((len1 + len2) < pkt_len)) {
             return overall_pushed;
         }
 
         ssize_t pushed;
         if (len1 >= pkt_len) {
-            pushed = push_to_tun_or_ring(tun_tx, b1, pkt_len, NULL, 0, &full);
+            pushed = push_pkt_to_tun_or_ring(tun_tx, b1, pkt_len, NULL, 0, &full);
             len1 -= pushed;
             b1 += pushed;
         } else {
             ssize_t buf2_to_be_pushed = (pkt_len - len1);
             assert((len2 - buf2_to_be_pushed) > 0);
-            pushed = push_to_tun_or_ring(tun_tx, b1, len1, b2, buf2_to_be_pushed, &full);
-            len1 = 0;
-            len2 -= buf2_to_be_pushed;
-            b2 += buf2_to_be_pushed;
+            pushed = push_pkt_to_tun_or_ring(tun_tx, b1, len1, b2, buf2_to_be_pushed, &full);
+            if (pushed > 0) {
+                len1 = 0;
+                len2 -= buf2_to_be_pushed;
+                b2 += buf2_to_be_pushed;
+            }
         }
         overall_pushed += pushed;
     } while(! full);
@@ -838,7 +869,8 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
 }
 
 static inline ssize_t push_to_tun_ipv6(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2) {
-
+    log_crit("log", L("IPv6 packet-hanlding not implemented yet"));
+    return 0;
 }
 
 static ssize_t push_to_tun(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx) {
@@ -871,7 +903,7 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
     if (event | EPOLLIN) {
         tun_tx_t tun_tx;
         tun_tx.fd = conn->ctx->tun_fd;
-        tun_tx.backlog = conn->ctx->tun_tx_bl;
+        tun_tx.backlog = conn->ctx->tun_tx;
         if (CONN_KILL == fill_ring(conn->fd, &conn->d.conn.rx, recv_batch, push_to_tun, &tun_tx)) {
             log_warn("io", L("Recv failed, connection id being dropped for sock: %d"), conn->fd);
             destroy_sock(conn);
@@ -879,9 +911,186 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
     }
 }
 
+static inline int expand_tun_wbuff_if_necessary(tun_pkt_buff_t *wbuff, ssize_t additional_space_required) {
+    if (additional_space_required > (wbuff->capacity - wbuff->len)) {
+        ssize_t new_cap = wbuff->capacity * 2;
+        if (new_cap < (additional_space_required + wbuff->len)) {
+            new_cap = additional_space_required + wbuff->len;
+        }
+        void *expanded_buff = realloc(wbuff->buff, new_cap);
+        if (NULL == expanded_buff) {
+            log_crit("io", L("failed to expand tun-write pkt-buff, was trying allocation sz: %z"), new_cap);
+            return -1;
+        }
+        wbuff->buff = expanded_buff;
+        wbuff->capacity = new_cap;
+    }
+    return 0;
+}
+
+static inline int write_to_tun(int fd, void *buff, ssize_t len, ssize_t *start, void *_tun_write_buff, ssize_t additional_len) {
+    tun_pkt_buff_t *wbuff = (tun_pkt_buff_t *) _tun_write_buff;
+    int ret = CONN_IO_OK;
+    uint16_t pkt_len;
+    ssize_t orig_len = len;
+
+    do {
+        ssize_t written = 0;
+        if (wbuff->current_pkt_len == 0) { /* start of a new pkt */
+            void *dummy;
+            PARSE_L3_PACKET_LEN(pkt_len, buff, len, dummy, 0);
+            if (pkt_len > 0) {
+                if (pkt_len <= len) {
+                    written = write(fd, buff, pkt_len);
+                    if (written > 0) {
+                        assert(written == pkt_len);
+                        buff += written;
+                        len -= written;
+                    }
+                } else {
+                    if (expand_tun_wbuff_if_necessary(wbuff, pkt_len) != 0) return CONN_UNKNOWN_ERR;
+                    wbuff->current_pkt_len = pkt_len;
+                    memcpy(wbuff->buff, buff, len);
+                    wbuff->len += len;
+                    len = 0;
+                }
+            }
+        } else {
+            ssize_t deficit = wbuff->current_pkt_len - wbuff->len;
+            if (len >= deficit) {
+                struct iovec out[2] = {wbuff->buff, wbuff->len, buff, deficit};
+                written = writev(fd, out, 2);
+                if (written > 0) {
+                    assert(written == (wbuff->len + deficit));
+                    buff += deficit;
+                    len -= deficit;
+                    wbuff->len = 0;
+                    wbuff->current_pkt_len = 0;
+                }
+            } else {
+                memcpy(wbuff->buff + wbuff->len, buff, len);
+                wbuff->len += len;
+                len = 0;
+            }
+        }
+
+        if (written < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                ret = CONN_IO_OK_EXHAUSTED;
+            } else {
+                log_crit("io", L("failed to write to tun dev"));
+                ret = CONN_UNKNOWN_ERR;
+            }
+        }
+    } while((ret == CONN_IO_OK) && (len > 0) && (pkt_len > 0));
+
+    return ret;
+}
+
+struct conn_bound_pkt_s {
+    tun_pkt_buff_t *pkt_buff;
+    int dest_fd;
+    ssize_t already_written;
+};
+
+typedef struct conn_bound_pkt_s conn_bound_pkt_t;
+
+static int read_from_tun_buff(int fd, void *to_buff, size_t capacity, ssize_t *end, void *hdlr_ctx, size_t additional_capacity) {
+    conn_bound_pkt_t *pkt = (conn_bound_pkt_t *) hdlr_ctx;
+    ssize_t available_content = pkt->pkt_buff->len - pkt->already_written;
+    ssize_t to_write = (available_content > capacity) ? capacity : available_content;
+
+    if (pkt->already_written == 0) { /* first invocation */
+        if (pkt->pkt_buff->len > (to_write + additional_capacity)) {
+            return CONN_IO_OK_NOT_ENOUGH_SPACE;
+        }
+    }
+
+    memcpy(to_buff, pkt->pkt_buff->buff + pkt->already_written, to_write);
+    *end += to_write;
+    pkt->already_written += to_write;
+    return (pkt->already_written == pkt->pkt_buff->len) ? CONN_IO_OK_EXHAUSTED : CONN_IO_OK;
+}
+
+static ssize_t write_passthru_to_conn(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx) {
+    conn_bound_pkt_t *pkt = (conn_bound_pkt_t *) hdlr_ctx;
+    int dest_fd = pkt->dest_fd;
+    ssize_t written = 0;
+    if (len1 > 0) {
+        send_bl_batch(dest_fd, b1, len1, &written, NULL);
+    }
+    if ((written == len1) && len2 > 0) {
+        send_bl_batch(dest_fd, b2, len2, &written, NULL);
+    }
+    return written;
+}
+
+static inline void write_to_conn(io_ctx_t *ctx, io_sock_t *conn, tun_pkt_buff_t *pkt_buff) {
+    if (conn == NULL) {
+        ctx->c_world_tx.drop_p++;
+        ctx->c_world_tx.drop_b += len;
+        return;
+    }
+
+    conn_bound_pkt_t pkt = {pkt_buff, conn->fd, 0};
+
+    int ret = fill_ring(-1, conn->d.conn.tx, read_from_tun_buff, write_passthru_to_conn, pkt);
+    
+    if (ret = CONN_IO_OK_NOT_ENOUGH_SPACE) {
+        ctx->c_world_tx.drop_p++;
+        ctx->c_world_tx.drop_b += len;
+        return;
+    }
+
+    assert(ret == CONN_IO_OK_EXHAUSTED);
+}
+
+static inline void read_tun_and_xmit(io_sock_t *tun) {
+    int fd = tun->fd;
+    io_ctx_t *ctx = tun->ctx;
+    tun_pkt_buff_t *pkt_buff = tun->d.tun.r_buff;
+    NET_ADDR(nw_addr);
+    uint8_t prev_ip_v = 0;
+    uint32_t *nw_addr_ipv4 = (uint32_t *) nw_addr;
+
+    do {
+        pkt_buff->len = read(fd, pkt_buff->buff, pkt_buff->capacity);
+        if (pkt_buff->len < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+                log_crit("io", L("Unexpected error in tun-read"));
+            break;
+        }
+        uint8_t ip_v = (*(uint8_t *) pkt_buff->buff) & 0xF0;
+        if (ip_v < prev_ip_v) {
+            memset(nw_addr, 0, MAX_NW_ADDR_LEN);
+            prev_ip_v = ip_v;
+        }
+        switch(ip_v) {
+        case 0x40:
+            assert(pkt_buff->len > 20);
+            *nw_addr_ipv4 = *(((uint32_t *) pkt_buff->buff) + 4);
+            io_sock_t *dest_sock = batab_get(&ctx->live_sockets, nw_addr);
+            write_to_conn(ctx, dest_sock, pkt_buff);
+        case 0x60: /* implement me! */
+        default:
+            log_crit("io", L("Unknown IP version: %d"), ip_v);
+        }
+    } while (1);
+}
+
+static inline void tun_io(uint32_t event, io_sock_t *tun) {
+    if (event | EPOLLOUT) {
+        if (CONN_UNKNOWN_ERR == drain_ring(tun->fd, &tun->d.conn.tx, write_to_tun, tun->d.tun.w_buff))
+            log_warn("io", L("TUN write failed. Fd: %d"), tun->fd); 
+    }
+    if (event | EPOLLIN) {
+        read_tun_and_xmit();
+    }
+}
+
 static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
     if (sock->typ == tun) {
-        tun_io(sock);
+        tun_io(event, sock);
     } else if (sock->typ == conn) {
         conn_io(event, sock);
     } else {
@@ -908,12 +1117,11 @@ int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const c
                         handle_io_evt(evts[i].events, (io_sock_t *) evts[i].data.ptr);
                     }
                 }
+                if (do_peer_reset) {
+                    reset_peers(ctx, peer_file_path, expected_port);
+                    do_peer_reset = 0;
+                }
             }
-            //reset_peers(ctx, peer_file_path, self_addr, listener_port);
-
-            
-            //poll loop
-
         }
     }
 }
