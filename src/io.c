@@ -62,6 +62,7 @@ struct io_sock_s {
     union {
         struct {
             uint8_t peer[MAX_NW_ADDR_LEN];
+            int af;
             int outbound;
             ring_buff_t rx, tx;
         } conn;
@@ -104,6 +105,7 @@ struct io_ctx_s {
     NET_ADDR(self_v6);
     int using_af;
     ring_buff_t *tun_tx;
+    const char *ipset_name;
     io_ctr_t c_tun_rx, c_tun_tx, c_world_rx, c_world_tx;
 };
 
@@ -145,12 +147,38 @@ static inline void destroy_tun_sock_data(io_sock_t *sock) {
     free(&sock->d.tun.r_buff.buff);
 }
 
-static inline void setup_conn_route(io_sock_t *sock) {
+static inline int setup_conn_route(io_sock_t *sock) {
+    assert(sock->typ == conn);
+    char addr_buff[MAX_ADDR_LEN];
+    char cmd_buff[MAX_ADDR_LEN + 100];
+    int af = sock->d.conn.af;
+
+    if (inet_ntop(af, sock->d.conn.peer, addr_buff, sizeof(addr_buff)) == NULL) {
+        log_warn("io", L("Could not determine peer-name for fd: %d, dropping"), sock->fd);
+        return -1;
+    }
+
+    int len = snprintf(cmd_buff, sizeof(cmd_buff), "ipset add %s %s", sock->ctx->ipset_name, addr_buff);
+    assert(len < (int) sizeof(cmd_buff) && len > 0);
     
+    return system(cmd_buff);
 }
 
-static inline void drop_conn_route(io_sock_t *sock) {
+static inline int drop_conn_route(io_sock_t *sock) {
+    assert(sock->typ == conn);
+    char addr_buff[MAX_ADDR_LEN];
+    char cmd_buff[MAX_ADDR_LEN + 100];
+    int af = sock->d.conn.af;
 
+    if (inet_ntop(af, sock->d.conn.peer, addr_buff, sizeof(addr_buff)) == NULL) {
+        log_warn("io", L("Could not determine peer-name for fd: %d, dropping"), sock->fd);
+        return -1;
+    }
+
+    int len = snprintf(cmd_buff, sizeof(cmd_buff), "ipset del %s %s", sock->ctx->ipset_name, addr_buff);
+    assert(len < (int) sizeof(cmd_buff) && len > 0);
+    
+    return system(cmd_buff);
 }
 
 static inline void destroy_sock(io_sock_t *sock) {
@@ -158,7 +186,9 @@ static inline void destroy_sock(io_sock_t *sock) {
     log_debug("io", L("destroying socket of type: %d (fd: %d)"), sock->typ, sock->fd);
 
     if (conn == sock->typ) {
-        drop_conn_route(sock);
+        if (drop_conn_route(sock) != 0) {
+            log_warn("io", L("Couldn't drop route to %d"), sock->fd);
+        }
     }
     
     if (epoll_ctl(sock->ctx->epoll_fd, EPOLL_CTL_DEL, sock->fd, NULL)) {
@@ -229,7 +259,11 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
     LIST_INSERT_HEAD(&ctx->all_sockets, sock, link);
 
     if (sock->typ == conn) {
-        setup_conn_route(sock);
+        if (setup_conn_route(sock) != 0) {
+            log_warn("io", L("Route-setup failed, dropping conn."));
+            destroy_sock(sock);
+            return -1;
+        }
     }
 
     return 0;
@@ -276,7 +310,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
 
 static void destroy_passive_peer(void *_pp);
 
-static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6) {
+static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name) {
     int epoll_fd;
     
 #	if defined(EPOLL_CLOEXEC) && defined(HAVE_EPOLL_CREATE1)
@@ -304,6 +338,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
 
     ctx->epoll_fd = epoll_fd;
     ctx->tun_fd = tun_fd;
+    ctx->ipset_name = ipset_name;
     LIST_INIT(&ctx->disconnected_passive_peers);
     LIST_INIT(&ctx->all_sockets);
     if (self_addr_v4 != NULL) {
@@ -582,9 +617,17 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
     return 0;
 }
 
-static int init_conn_sock(io_sock_t *sock, void *_peer_addr) {
-    uint8_t *peer_addr = (uint8_t *) _peer_addr;
-    memcpy(sock->d.conn.peer, peer_addr, MAX_NW_ADDR_LEN);
+struct conn_sock_info_s {
+    uint8_t *addr;
+    int af;
+};
+
+typedef struct conn_sock_info_s conn_sock_info_t;
+
+static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
+    conn_sock_info_t * addr_info = (conn_sock_info_t *) _addr_info;
+    memcpy(sock->d.conn.peer, addr_info->addr, MAX_NW_ADDR_LEN);
+    sock->d.conn.af = addr_info->af;
     if (init_backlog_ring(&sock->d.conn.tx, CONN_RING_SZ) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
         return -1;
@@ -599,7 +642,8 @@ static int init_conn_sock(io_sock_t *sock, void *_peer_addr) {
 static int init_out_conn_sock(io_sock_t *sock, void *_peer) {
     passive_peer_t *peer = (passive_peer_t *) _peer;
     sock->d.conn.outbound = 1;
-    int ret = init_conn_sock(sock, peer->addr);
+    conn_sock_info_t addr_info = { .addr = peer->addr, .af = peer->addr_info->ai_family};
+    int ret = init_conn_sock(sock, &addr_info);
     sock->d.conn.outbound = 1;
     peer->addr_info = NULL;
     return ret;
@@ -669,8 +713,9 @@ static inline int do_accept(io_sock_t *listener_sock) {
     default:
         log_warn("io", L("Encountered unexpected address-family: %d in inbound socket"), r->sa_family);
     }
-    
-    if (add_sock(listener_sock->ctx, conn_fd, conn, init_conn_sock, client_addr) != 0) {
+
+    conn_sock_info_t addr_info = {.addr = nw_addr, .af = r->sa_family};
+    if (add_sock(listener_sock->ctx, conn_fd, conn, init_conn_sock, &addr_info) != 0) {
         log_warn("io", L("Couldn't plug inbound socket into io-ctx"));
     }
     return 1;
@@ -1139,10 +1184,10 @@ static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
 
 #define MAX_POLLED_EVENTS 256
 
-int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port) {
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name) {
     int ret = -1;
     io_ctx_t *ctx;
-    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6)) != NULL) {
+    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
             int num_evts;

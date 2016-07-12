@@ -1,6 +1,6 @@
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS        = src test
+SUBDIRS        = src test scripts
 EXTRA_DIST     = get-version autogen.sh
 DISTCLEANFILES = ChangeLog
 dist_doc_DATA  = README.md

@@ -7,7 +7,7 @@ AC_INIT([l3tc],
 AC_CONFIG_SRCDIR([src/log.c])
 AC_CONFIG_HEADER([config.h])
 AC_GNU_SOURCE
-AC_CONFIG_FILES([Makefile src/Makefile test/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile test/Makefile scripts/Makefile])
 AC_CONFIG_MACRO_DIR([m4])
 AM_INIT_AUTOMAKE([foreign -Wall -Werror tar-ustar])
 AM_MAINTAINER_MODE

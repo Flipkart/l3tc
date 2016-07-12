@@ -33,6 +33,7 @@ extern const char *__progname;
 
 #define MAX_FILE_PATH_LEN 1024
 #define DEFAULT_LISTNER_PORT 15
+#define MAX_IPSET_NAME_LEN 64
 
 static void usage(void) {
 	/* TODO:3002 Don't forget to update the usage block with the most
@@ -48,7 +49,9 @@ static void usage(void) {
     fprintf(stderr, " -p, --peerList  <path>                   path to file containing list of peers (IP v4/v6 addresses or hostnames)\n");
     fprintf(stderr, " -4, --selfIpv4  <addr>                   hosts own address as seen by peers (IP v4)\n");
     fprintf(stderr, " -6, --selfIpv6  <addr>                   hosts own address as seen by peers (IP v6)\n");
-    fprintf(stderr, " -c, --compLvl  <compression-level>       Compression level between (0: none, 1: fast ... 9: best)\n");
+    fprintf(stderr, " -c, --compLvl  <compression-level>       compression level between (0: none, 1: fast ... 9: best)\n");
+    fprintf(stderr, " -s, --setName  <ipset>                   ipset set-name to be used to record peers for selectively compressing flows\n");
+    fprintf(stderr, " -u, --upScript <route-up cmd>            command for setting-up routing (run once tunnel is up)\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
 }
@@ -61,6 +64,8 @@ int main(int argc, char *argv[]) {
     char *self_addr_v6 = NULL;
     int compression_level = DEFAULT_COMPRESSION_LEVEL;
     int listener_port = 15;
+    char *ipset_name = NULL;
+    char *route_up_cmd = NULL;
 
 	/* TODO:3001 If you want to add more options, add them here. */
 	static struct option long_options[] = {
@@ -72,10 +77,12 @@ int main(int argc, char *argv[]) {
                 { "selfIpv6", required_argument, 0, '6' },
                 { "listenerPort", required_argument, 0, 'l' },
                 { "compLvl", required_argument, 0, 'c' },
+                { "setName", required_argument, 0, 's' },
+                { "upCmd", required_argument, 0, 'u' },
                 { 0 }};
 	while (1) {
 		int option_index = 0;
-		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:",
+		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:",
 		    long_options, &option_index);
 		if (ch == -1) break;
 		switch (ch) {
@@ -111,6 +118,14 @@ int main(int argc, char *argv[]) {
 		case 'l':
 			listener_port = atoi(optarg);
 			break;
+        case 's':
+            assert(ipset_name == NULL);
+            ipset_name = strndup(optarg, MAX_IPSET_NAME_LEN);
+			break;
+        case 'u':
+            assert(route_up_cmd == NULL);
+            route_up_cmd = strndup(optarg, MAX_FILE_PATH_LEN);
+			break;
 		default:
 			fprintf(stderr, "unknown option `%c'\n", ch);
 			usage();
@@ -130,21 +145,31 @@ int main(int argc, char *argv[]) {
         error = "Self address not provided, please provide either v4 or v6 or both.";
     }
 
+    if ((! error) && (route_up_cmd == NULL)) {
+        error = "Route-up cmd not provided";
+    }
+
+    if (ipset_name == NULL) {
+        ipset_name = strdup("l3tc");
+    }
+
     int tun_fd;
     if (! error) {
         log_debug("main", "Allocating tun");
-        tun_fd = alloc_tun();
+        tun_fd = alloc_tun(route_up_cmd);
         if (tun_fd <= 0) {
             error = "Could not open tunnel";
         }
     }
 
     if (! error) {
-        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port) != 0) error = "io loop failed";
+        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name) != 0) error = "io loop failed";
     }
 
     free(self_addr_v4);
     free(self_addr_v6);
+    free(ipset_name);
+    free(route_up_cmd);
     free(peer_file);
     if (tun_fd > 0)
         close(tun_fd);
