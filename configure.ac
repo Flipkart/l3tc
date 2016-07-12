@@ -64,7 +64,7 @@ esac
 AC_CACHE_SAVE
 
 PKG_CHECK_MODULES([ZLIB], [zlib])
-AC_CHECK_HEADERS([sys/types.h sys/socket.h sys/epoll.h sys/queue.h uthash.h assert.h sys/uio.h])
+AC_CHECK_HEADERS([errno.h sys/types.h sys/socket.h netdb.h sys/epoll.h sys/queue.h uthash.h assert.h sys/uio.h netinet/in.h netinet/ip.h unistd.h fcntl.h arpa/inet.h])
 
 AC_ARG_ENABLE(valgrind,
         [AS_HELP_STRING([--enable-valgrind], [Run testbench with valgrind. @<:@default=no@:>@])],

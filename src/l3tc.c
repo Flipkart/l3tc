@@ -21,6 +21,7 @@
 #include "l3tc.h"
 #include "common.h"
 #include "tun.h"
+#include "io.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -138,10 +139,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* if (! error) { */
-    /*     if (io(tun_fd, peer_file, self_addr, listener_port) != 0) */
-    /*         error = "io loop failed"; */
-    /* } */
+    if (! error) {
+        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port) != 0) error = "io loop failed";
+    }
 
     free(self_addr_v4);
     free(self_addr_v6);
