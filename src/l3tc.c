@@ -142,7 +142,7 @@ int main(int argc, char *argv[]) {
     }
 
     if ((! error) && (self_addr_v4 == NULL && self_addr_v6 == NULL)) {
-        error = "Self address not provided, please provide either v4 or v6 or both.";
+        error = "Self address not provided, please provide either v4 or v6.";
     }
 
     if ((! error) && (route_up_cmd == NULL)) {

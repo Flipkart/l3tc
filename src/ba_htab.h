@@ -40,4 +40,6 @@ int batab_put(batab_t *tab, void *new_value, void **old_value);
 #define batab_foreach_do(tab, e)                \
     HASH_ITER(hh, tab->t, e, tab->tmp)
 
+unsigned batab_sz(batab_t *tab);
+
 #endif

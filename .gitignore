@@ -46,5 +46,6 @@ Makefile
 *.log
 *.trs
 /test/*_test
+/test/test.tmp
 
 TAGS

@@ -26,11 +26,13 @@ void test_with_statically_allocated_values() {
     bar.str = "bar";
     quux.i32 = 30;
     quux.str = "quux";
-    
+
     assert(batab_put(&tab, &foo, NULL) == 0);
     assert(batab_put(&tab, &bar, NULL) == 0);
     assert(batab_put(&tab, &quux, NULL) == 0);
 
+    assert(batab_sz(&tab) == 3);
+    
     int lkp = 10;
 
     assert(strcmp(((data_t*)batab_get(&tab, (uint8_t *)&lkp))->str, "foo") == 0);
@@ -117,6 +119,8 @@ void test_with_complex_dynamically_allocated_values() {
     assert(batab_put(&tab, one, NULL) == 0);
     assert(batab_put(&tab, two, NULL) == 0);
 
+    assert(batab_sz(&tab) == 2);
+
     char key[KEY_LEN];
 
     memset(key, 0, KEY_LEN);
@@ -165,6 +169,9 @@ void test_with_complex_dynamically_allocated_values() {
     strcpy(key, "TWO");
     assert(((F*) batab_get(&tab, key))->label == 3);
     assert(old_val->label == 2);
+    
+    assert(batab_sz(&tab) == 2);
+
 
     foo_destructor(two);
 
@@ -200,6 +207,8 @@ void test_with_complex_dynamically_allocated_values() {
     strcpy(key, "TWO");
     assert(batab_remove(&tab, key) == 0);
     assert(batab_get(&tab, key) == NULL);
+
+    assert(batab_sz(&tab) == 1);
 
     memset(key, 0, KEY_LEN);
     strcpy(key, "ONE");

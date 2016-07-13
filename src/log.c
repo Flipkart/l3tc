@@ -33,7 +33,7 @@
 #include <time.h>
 
 /* By default, logging is done on stderr. */
-static int	 debug = 1;
+int	 debug = 1;
 
 /* Logging can be modified by providing an appropriate log handler. */
 static void (*logh)(int severity, const char *msg, void *) = NULL;

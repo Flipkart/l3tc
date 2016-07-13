@@ -21,6 +21,12 @@
 #define L(msg)                                          \
     "<%s:%d (%s)> "msg, __FILE__, __LINE__, __func__
 
+extern int debug;
+
+#define DBG                                     \
+    if (debug > 2) log_debug
+
+
 /* log.c */
 void             log_init(int, const char *);
 void             log_warn(const char *, const char *, ...) __attribute__ ((format (printf, 2, 3)));
@@ -31,7 +37,7 @@ void             log_debug(const char *, const char *, ...) __attribute__ ((form
 void             fatal(const char*, const char *) __attribute__((__noreturn__));
 void             fatalx(const char *) __attribute__((__noreturn__));
 
-void		 log_register(void (*cb)(int, const char*, void*), void*);
+void	    	 log_register(void (*cb)(int, const char*, void*), void*);
 void             log_accept(const char *);
 
 #endif

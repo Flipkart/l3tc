@@ -34,7 +34,7 @@ int alloc_tun(const char *tun_up_cmd, const char *ipset_name) {
     struct ifreq ifr;
     int fd, err;
     if((fd = open("/dev/net/tun", O_RDWR)) < 0)
-        fatal("tun", "ioctl call for tun device failed");
+        fatal("tun", "open for tun device failed");
 
     memset(&ifr, 0, sizeof(ifr));
 

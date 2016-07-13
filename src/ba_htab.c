@@ -53,7 +53,7 @@ void *batab_get(batab_t *tab, uint8_t *key) {
     return e->value;
 }
 
-void _batab_print_key(batab_t *tab, void *new_value) {
+static void _batab_print_key(batab_t *tab, void *new_value) {
     tab->print_buf[0] = '[';
     unsigned i;
     uint8_t *key = new_value + tab->key_offset;
@@ -96,4 +96,9 @@ int batab_remove(batab_t *tab, uint8_t *key) {
     if (e == NULL) return -1;
     _batab_del_entry(tab, e, 1);
     return 0;
+}
+
+unsigned batab_sz(batab_t *tab) {
+    unsigned c = HASH_COUNT(tab->t);
+    return c;
 }

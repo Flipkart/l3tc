@@ -39,20 +39,50 @@ e sw ip link set r0 up
 e sw ip link set g0 up
 e sw ip link set b0 up
 
+red_ip=192.168.10.1
 e red ip link set r1 up
-e red ip addr add 192.168.10.1/28 dev r1
+e red ip addr add $red_ip/28 dev r1
 
+green_ip=192.168.10.2
 e green ip link set g1 up
-e green ip addr add 192.168.10.2/28 dev g1
+e green ip addr add $green_ip/28 dev g1
 
+blue_ip=192.168.10.3
 e blue ip link set b1 up
-e blue ip addr add 192.168.10.3/28 dev b1
+e blue ip addr add $blue_ip/28 dev b1
 
 # ensure everyone can talk to everyone else, for now
-e red ping -c 1 192.168.10.2
-e red ping -c 1 192.168.10.3
-e green ping -c 1 192.168.10.3
-e green ping -c 1 192.168.10.1
-e blue ping -c 1 192.168.10.1
-e blue ping -c 1 192.168.10.2
+e red ping -c 1 $green_ip
+e red ping -c 1 $blue_ip
+e green ping -c 1 $blue_ip
+e green ping -c 1 $red_ip
+e blue ping -c 1 $red_ip
+e blue ping -c 1 $green_ip
 
+tmp_dir=$(readlink -f test.tmp)
+mkdir -p $tmp_dir
+peer_file=$tmp_dir/peers
+
+echo "$red_ip
+$green_ip
+$blue_ip" > $peer_file
+
+e red ../src/l3tc -d -d -p $peer_file -4 $red_ip -c 0 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &
+red_pid=$!
+e green ../src/l3tc -d -d -p $peer_file -4 $green_ip -c 0 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &
+green_pid=$!
+e blue ../src/l3tc -d -d -p $peer_file -4 $blue_ip -c 0 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
+blue_pid=$!
+
+e red ping -c 1 $green_ip
+e red ping -c 1 $blue_ip
+e green ping -c 1 $blue_ip
+e green ping -c 1 $red_ip
+e blue ping -c 1 $red_ip
+e blue ping -c 1 $green_ip
+
+kill -TERM $red_pid $green_pid $blue_pid
+
+wait $red_pid && echo "Red came clean"
+wait $green_pid  && echo "Green came clean"
+wait $blue_pid && echo "Blue came clean"

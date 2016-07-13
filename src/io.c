@@ -123,6 +123,7 @@ static inline void destroy_io_ctx(io_ctx_t *ctx) {
 }
 
 static inline void destroy_ring_buff(ring_buff_t *ring) {
+    DBG("io", L("destroying ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d }"), ring, ring->sz, ring->start, ring->end, ring->wraped);
     free(ring->buff);
 }
 
@@ -276,6 +277,7 @@ static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz) {
     rbuff->sz = sz;
     rbuff->start = rbuff->end = 0;
     rbuff->wraped = 0;
+    DBG("io", L("backlog ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d } initialized"), rbuff, rbuff->sz, rbuff->start, rbuff->end, rbuff->wraped);
     return 0;
 }
 
@@ -283,6 +285,7 @@ static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz) {
 #define MAX_L3_PKT_SZ 0xFFFF /* check hop-by-hop stuff for IPv6, 0xFFFF will do for IPv4 though */
 
 static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
+    DBG("io", L("initializing tun state"));
     assert(io_ctx != NULL);
     io_ctx_t *ctx = (io_ctx_t *) io_ctx;
     if (init_backlog_ring(&sock->d.tun.tx, TUN_RING_SZ) != 0) {
@@ -319,7 +322,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
 	if((epollfd < 0) && (ENOSYS == errno))
 #	endif
 	{
-		log_warn("io", L("uses epoll_create"));
+		log_warnx("io", L("uses epoll_create"));
 		/* Just provide some number, kernel ignores it anyway */
 		epoll_fd = epoll_create(10);
 	}
@@ -372,6 +375,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
         destroy_io_ctx(ctx);
         return NULL;
     }
+    DBG("io", L("adding tun: %d"), tun_fd);
     if (add_sock(ctx, tun_fd, tun, init_tun_tx_backlog_ring, ctx) != 0) {
         log_crit("io", L("Couldn't add tun to io-ctx"));
     }
@@ -387,7 +391,11 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
     snprintf(buff, sizeof(buff), "%d", listener_port);
-    getaddrinfo("", buff, &hints, &res);
+    int ret = getaddrinfo(NULL, buff, &hints, &res);
+    if (ret != 0) {
+        log_crit("io", L("Couldn't get addr-info for listen: %s"), gai_strerror(ret));
+        return -1;
+    }
     int on = 1;
     
     for (max_socks = 0, num_socks = 0, r = res;
@@ -522,7 +530,7 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
     NET_ADDR(nw_addr);
     batab_t updated_passive_peers;
 
-    if (batab_init(&updated_passive_peers, 0, MAX_NW_ADDR_LEN, destroy_passive_peer, "current-passive-nw-addrs") != 0) {
+    if (batab_init(&updated_passive_peers, offsetof(passive_peer_t, addr), MAX_NW_ADDR_LEN, destroy_passive_peer, "current-passive-nw-addrs") != 0) {
         log_crit("io", L("failed to initialize current-passive-peers tracker"));
         return -1;
     }
@@ -540,11 +548,16 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
     int encountered_failure = 0;
     
     while (fgets(peer, MAX_ADDR_LEN, f) != NULL) {
+        char *pos;
+        if ((pos=strchr(peer, '\n')) != NULL)
+            *pos = '\0';
+        
         res = NULL;
         if (getaddrinfo(peer, port_buff, &hints, &res) != 0) {
             log_warn("io", L("ignoring peer: %s"), peer);
             continue;
         }
+        log_info("io", L("processing peer: %s"), peer);
 
         r = res;
         p = NULL;
@@ -564,14 +577,17 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
                 log_warn("io", L("failed to get name-info for peer: %s"), peer);
             }
 
+            log_info("io", L("found peer: %s == host: %s and port: %s"), peer, host_buff, port_buff);
+
             memset(nw_addr, 0, MAX_NW_ADDR_LEN);
             switch (r->ai_family) {
             case AF_INET:
                 if (ctx->using_af | USING_IPV4) {
                     void *client_addr = (void *)&((struct sockaddr_in *) r->ai_addr)->sin_addr.s_addr;
                     if (memcmp(client_addr, ctx->self_v4, IPv4_ADDR_LEN) > 0) {
+                        log_info("io", L("peer %s is PASSIVE"), peer);
                         memcpy(nw_addr, client_addr, IPv4_ADDR_LEN);
-                        encountered_failure = capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
+                        encountered_failure |= capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
                     }
                 }
                 break;
@@ -579,8 +595,9 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
                 if (ctx->using_af | USING_IPV6) {
                     void *client_addr = (void *)((struct sockaddr_in6 *) r->ai_addr)->sin6_addr.s6_addr;
                     if (memcmp(client_addr, ctx->self_v6, IPv6_ADDR_LEN) > 0) {
+                        log_info("io", L("peer %s is PASSIVE"), peer);
                         memcpy(nw_addr, client_addr, IPv6_ADDR_LEN);
-                        encountered_failure = capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
+                        encountered_failure |= capture_passive_peer(&updated_passive_peers, nw_addr, r, host_buff, port_buff, &do_free_addr_info);
                     }
                 }
                 break;
@@ -593,11 +610,14 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
     }
 
     if (! encountered_failure) {
+        DBG("io", L("found a total of %u passive peers"), batab_sz(&updated_passive_peers));
+        
         batab_entry_t *e;
         batab_foreach_do((&ctx->passive_peers), e) {
             passive_peer_t *old = (passive_peer_t*) e->value;
             passive_peer_t *corresponding_new = batab_get(&updated_passive_peers, old->addr);
             if (corresponding_new == NULL) {
+                DBG("io", L("Killing (old) passive-peer: %s"), old->humanified_address);
                 disconnect_and_discard_passive_peer(ctx, old);
             }
         }
@@ -605,6 +625,7 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
             passive_peer_t *new = (passive_peer_t*) e->value;
             passive_peer_t *corresponding_old = batab_get(&ctx->passive_peers, new->addr);
             if (corresponding_old == NULL) {
+                DBG("io", L("Attempting addition of passive-peer: %s"), new->humanified_address);
                 connect_and_add_passive_peer(ctx, new);
             }
         }
@@ -690,6 +711,7 @@ void trigger_io_loop_stop() {
 }
 
 static inline int do_accept(io_sock_t *listener_sock) {
+    DBG("io", L("called to ACCEPT"));
     struct sockaddr_storage remote_addr;
 	socklen_t remote_addr_len = sizeof(remote_addr);
     NET_ADDR(nw_addr);
@@ -745,19 +767,34 @@ static inline int send_bl_batch(int fd, void *buff, ssize_t len, ssize_t *start,
 typedef int (io_handler_fn_t)(int fd, void *buff, ssize_t len, ssize_t *tracker, void *hdlr_ctx, ssize_t additional_len);
 
 static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, void *hdlr_ctx) {
+    DBG("io", L("fd %d, ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d }, io_hdlr: %p, ctx: %p"), fd, r, r->sz, r->start, r->end, r->wraped, io_hdlr, hdlr_ctx);
+
     int ret = CONN_IO_OK;
     do {
         if (r->wraped) {
+            DBG("io", L("wrapped"));
             if (r->sz == r->start) {
+                DBG("io", L("resetting start as tail drained out"));
                 r->start = 0;
                 r->wraped = 0;
                 continue;
             }
-            ret = io_hdlr(fd, r->buff + r->start, r->sz - r->start, &r->start, hdlr_ctx, r->end);
+            ssize_t len = r->sz - r->start;
+            ssize_t additional_len = r->end;
+            DBG("io", L("calling io-hdlr while wrapped, space-advertized %zd, additional %zd, buff-start-offset: %zd (buff_base: %p)"), len, additional_len, (ssize_t) r->buff + r->start, r->buff);
+            ret = io_hdlr(fd, r->buff + r->start, len, &r->start, hdlr_ctx, additional_len);
         } else {
-            if (r->end == r->start) break;
-            ret = io_hdlr(fd, r->buff + r->start, r->end - r->start, &r->start, hdlr_ctx, 0);
+            DBG("io", L("NOT wrapped"));
+            if (r->end == r->start) {
+                DBG("io", L("ring is empty, breaking"));
+                break;
+            }
+            ssize_t len = r->end - r->start;
+            ssize_t additional_len = 0;
+            DBG("io", L("calling io-hdlr while wrapped, space-advertized %zd, additional %zd, buff-start-offset: %zd (buff_base: %p)"), len, additional_len, (ssize_t) r->buff + r->start, r->buff);
+            ret = io_hdlr(fd, r->buff + r->start, len, &r->start, hdlr_ctx, additional_len);
         }
+        DBG("io", L("ret: %d, ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d }"), ret, r, r->sz, r->start, r->end, r->wraped);
     } while(CONN_IO_OK == ret);
     return ret;
 }
@@ -980,12 +1017,14 @@ static ssize_t push_to_tun(void *b1, ssize_t len1, void *b2, ssize_t len2, void 
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
     if (event | EPOLLOUT) {
+        DBG("io", L("called for OUT"));
         if (CONN_KILL == drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL)) {
             log_warn("io", L("Send failed, connection is being dropped for sock: %d"), conn->fd); 
             destroy_sock(conn);
         }
     }
     if (event | EPOLLIN) {
+        DBG("io", L("called for IN"));
         tun_tx_t tun_tx;
         tun_tx.fd = conn->ctx->tun_fd;
         tun_tx.backlog = conn->ctx->tun_tx;
@@ -1163,10 +1202,12 @@ static inline void read_tun_and_xmit(io_sock_t *tun) {
 
 static inline void tun_io(uint32_t event, io_sock_t *tun) {
     if (event | EPOLLOUT) {
-        if (CONN_UNKNOWN_ERR == drain_ring(tun->fd, &tun->d.conn.tx, write_to_tun, &tun->d.tun.w_buff))
+        DBG("io", L("called for OUT"));
+        if (CONN_UNKNOWN_ERR == drain_ring(tun->fd, &tun->d.tun.tx, write_to_tun, &tun->d.tun.w_buff))
             log_warn("io", L("TUN write failed. Fd: %d"), tun->fd); 
     }
     if (event | EPOLLIN) {
+        DBG("io", L("called for IN"));
         read_tun_and_xmit(tun);
     }
 }
