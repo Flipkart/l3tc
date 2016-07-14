@@ -162,7 +162,7 @@ int main(int argc, char *argv[]) {
     int tun_fd;
     if (! error) {
         log_debug("main", "Allocating tun");
-        tun_fd = alloc_tun(route_up_cmd);
+        tun_fd = alloc_tun(route_up_cmd, ipset_name);
         if (tun_fd <= 0) {
             error = "Could not open tunnel";
         }
