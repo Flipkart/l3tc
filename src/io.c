@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <time.h>
 
 #define LISTEN_BACKLOG 1024
 #define INET_ADDR_STRING_LEN 48
@@ -387,7 +388,7 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
     int max_socks, num_socks;
     memset(&hints, 0, sizeof(hints));
 	hints.ai_flags = AI_PASSIVE;
-	hints.ai_family = AF_UNSPEC;
+	hints.ai_family = AF_INET; /* hardcode IPv4 for now, debug why it delivers AF_INET connection as IPv6 on the other side */
 	hints.ai_socktype = SOCK_STREAM;
     snprintf(buff, sizeof(buff), "%d", listener_port);
     int ret = getaddrinfo(NULL, buff, &hints, &res);
@@ -466,19 +467,66 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
 static int do_peer_reset = 0;
 static int do_stop = 0;
 
-static int setup_outbount_connection(passive_peer_t *peer) {
+
+struct conn_sock_info_s {
+    uint8_t *addr;
+    int af;
+};
+
+typedef struct conn_sock_info_s conn_sock_info_t;
+
+static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
+    conn_sock_info_t * addr_info = (conn_sock_info_t *) _addr_info;
+    io_ctx_t *ctx = sock->ctx;
+    memcpy(sock->d.conn.peer, addr_info->addr, MAX_NW_ADDR_LEN);
+    sock->d.conn.af = addr_info->af;
+    if (init_backlog_ring(&sock->d.conn.tx, CONN_RING_SZ) != 0) {
+        log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
+        return -1;
+    }
+    if (init_backlog_ring(&sock->d.conn.rx, CONN_RING_SZ) != 0) {
+        log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
+        return -1;
+    }
+    if (batab_put(&ctx->live_sockets, sock, NULL) != 0) {
+        log_crit("io", L("couldn't wire-up lookup for sock: %d"), sock->fd);
+        return -1;
+    }
+    return 0;
+}
+
+static int init_out_conn_sock(io_sock_t *sock, void *_peer) {
+    passive_peer_t *peer = (passive_peer_t *) _peer;
+    conn_sock_info_t addr_info = { .addr = peer->addr, .af = peer->addr_info->ai_family};
+    int ret = init_conn_sock(sock, &addr_info);
+    sock->d.conn.outbound = 1;
+    return ret;
+}
+
+static int setup_outbound_connection(io_ctx_t *ctx, passive_peer_t *peer) {
     struct addrinfo *r = peer->addr_info;
+    assert(peer->addr_info != NULL);
     int c_fd = socket(r->ai_family, r->ai_socktype, r->ai_protocol);
+    int failed = 0;
     if (c_fd < 0) {
         log_warn("io", L("could not create socket for connecting to peer: %s"), peer->humanified_address);
-    } else {
-        if (connect(c_fd, r->ai_addr, r->ai_addrlen) == 0) {
-            log_info("io", L("connnected as client to peer: %s"), peer->humanified_address);
-        } else {
-            log_warn("io", L("failed to connect to peer: %s, will try later"), peer->humanified_address);
-            return -1;
-        }
+        return -1;
     }
+    if (connect(c_fd, r->ai_addr, r->ai_addrlen) == 0) {
+        log_info("io", L("connnected as client to peer: %s"), peer->humanified_address);
+        if (add_sock(ctx, c_fd, conn, init_out_conn_sock, peer) != 0) {
+            log_warn("io", L("Failed to add passive-peer %s socket to io-ctx"), peer->humanified_address);
+            failed = 1;
+        }
+    } else {
+        log_warn("io", L("failed to connect to peer: %s, will try later"), peer->humanified_address);
+        failed = 1;
+    }
+    if (failed) {
+        close(c_fd);
+        c_fd = -1;
+    }
+    assert(peer->addr_info != NULL);
     return c_fd;
 }
 
@@ -486,6 +534,7 @@ static passive_peer_t *create_passive_peer(struct addrinfo *r, uint8_t *nw_addr)
     passive_peer_t *pp = malloc(sizeof(passive_peer_t));
     if (pp == NULL) return NULL;
     assert(r->ai_next == NULL);
+    assert(r != NULL);
     pp->addr_info = r;
     memcpy(pp->addr, nw_addr, MAX_NW_ADDR_LEN);
     if (inet_ntop(pp->addr_info->ai_family, pp->addr, pp->humanified_address, INET_ADDR_STRING_LEN) == NULL) {
@@ -520,8 +569,8 @@ static int capture_passive_peer(batab_t *tab, uint8_t *nw_addr, struct addrinfo 
     return 0;
 }
 
-void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer);
-void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer);
+static void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer);
+static void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer);
 
 static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_port) {
     char peer[MAX_ADDR_LEN];
@@ -638,44 +687,8 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
     return 0;
 }
 
-struct conn_sock_info_s {
-    uint8_t *addr;
-    int af;
-};
-
-typedef struct conn_sock_info_s conn_sock_info_t;
-
-static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
-    conn_sock_info_t * addr_info = (conn_sock_info_t *) _addr_info;
-    io_ctx_t *ctx = sock->ctx;
-    memcpy(sock->d.conn.peer, addr_info->addr, MAX_NW_ADDR_LEN);
-    sock->d.conn.af = addr_info->af;
-    if (init_backlog_ring(&sock->d.conn.tx, CONN_RING_SZ) != 0) {
-        log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
-        return -1;
-    }
-    if (init_backlog_ring(&sock->d.conn.rx, CONN_RING_SZ) != 0) {
-        log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
-        return -1;
-    }
-    if (batab_put(&ctx->live_sockets, sock, NULL) != 0) {
-        log_crit("io", L("couldn't wire-up lookup for sock: %d"), sock->fd);
-        return -1;
-    }
-    return 0;
-}
-
-static int init_out_conn_sock(io_sock_t *sock, void *_peer) {
-    passive_peer_t *peer = (passive_peer_t *) _peer;
-    sock->d.conn.outbound = 1;
-    conn_sock_info_t addr_info = { .addr = peer->addr, .af = peer->addr_info->ai_family};
-    int ret = init_conn_sock(sock, &addr_info);
-    sock->d.conn.outbound = 1;
-    peer->addr_info = NULL;
-    return ret;
-}
-
-void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
+static void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
+    assert(peer->addr_info != NULL);
     passive_peer_t *peer_copy = create_passive_peer(peer->addr_info, peer->addr);
     if (peer_copy == NULL) {
         log_warn("io", L("Failed to allocate passive-peer (copy) for address %s adding to io-ctx"), peer->humanified_address);
@@ -686,19 +699,20 @@ void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
         free(peer_copy);
         return;
     }
-    int fd = setup_outbount_connection(peer);
-    if (fd >= 0 && add_sock(ctx, fd, conn, init_out_conn_sock, peer) != 0) {
-        log_warn("io", L("Failed to add passive-peer %s socket to io-ctx"), peer_copy->humanified_address);
-        fd = -1;
-    }
-    if (fd < 0) {
+
+    assert(peer_copy->addr_info != NULL);
+    peer->addr_info = NULL; /* so it doesn't get free'd */
+    assert(peer_copy->addr_info != NULL);
+    
+    if (setup_outbound_connection(ctx, peer_copy) < 0) {
         log_warn("io", L("Failed to setup connection to peer: %s, adding disconnected"), peer_copy->humanified_address);
         LIST_INSERT_HEAD(&ctx->disconnected_passive_peers, peer_copy, link);
-        peer->addr_info = NULL; /* so it doesn't get free'd */
     }
+
+    assert(peer_copy->addr_info != NULL);
 }
 
-void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
+static void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
     io_sock_t *sock = batab_get(&ctx->live_sockets, peer->addr);
     if (sock != NULL) destroy_sock(sock);
     passive_peer_t *pp = batab_get(&ctx->passive_peers, peer->addr);
@@ -756,12 +770,19 @@ static inline int do_accept(io_sock_t *listener_sock) {
 
 static inline int send_bl_batch(int fd, void *buff, ssize_t len, ssize_t *start, void *ignore, ssize_t ignore_) {
     ssize_t sent = send(fd, buff, len, MSG_NOSIGNAL);
+    DBG("io", L("sent: %zd bytes to fd %d, wanted to send: %zd from %p"), sent, fd, len, buff);
     if (sent < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return CONN_IO_OK_EXHAUSTED;
-        if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE) return CONN_KILL;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            DBG("io", L("send failed as socket is not write-ready"));
+            return CONN_IO_OK_EXHAUSTED;
+        }
+        if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE) {
+            DBG("io", L("send failed as connection is broken"));
+            return CONN_KILL;
+        }
         return CONN_UNKNOWN_ERR;
     } else {
-        start += sent;
+        *start += sent;
         return CONN_IO_OK;
     }
 }
@@ -771,8 +792,13 @@ static inline int send_bl_batch(int fd, void *buff, ssize_t len, ssize_t *start,
    for future io-handler call and should not be used immediately) */
 typedef int (io_handler_fn_t)(int fd, void *buff, ssize_t len, ssize_t *tracker, void *hdlr_ctx, ssize_t additional_len);
 
+#define BUFF_STATE_FORAMT_STR "ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d }"
+
+#define BUFF_STATE_VARS(r)                      \
+    r, r->sz, r->start, r->end, r->wraped
+
 static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, void *hdlr_ctx) {
-    DBG("io", L("fd %d, ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d }, io_hdlr: %p, ctx: %p"), fd, r, r->sz, r->start, r->end, r->wraped, io_hdlr, hdlr_ctx);
+    DBG("io", L("fd %d, "BUFF_STATE_FORAMT_STR", io_hdlr: %p, ctx: %p"), fd, BUFF_STATE_VARS(r), io_hdlr, hdlr_ctx);
 
     int ret = CONN_IO_OK;
     do {
@@ -786,8 +812,9 @@ static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, v
             }
             ssize_t len = r->sz - r->start;
             ssize_t additional_len = r->end;
-            DBG("io", L("calling io-hdlr while wrapped, space-advertized %zd, additional %zd, buff-start-offset: %zd (buff_base: %p)"), len, additional_len, (ssize_t) r->buff + r->start, r->buff);
+            DBG("io", L("calling io-hdlr while wrapped, space-advertized %zd, additional %zd, buff-start-offset: %zd (buff_base: %p) "BUFF_STATE_FORAMT_STR), len, additional_len, (ssize_t) r->buff + r->start, r->buff, BUFF_STATE_VARS(r));
             ret = io_hdlr(fd, r->buff + r->start, len, &r->start, hdlr_ctx, additional_len);
+            DBG("io", L("after io-hdlr call(ret: %d): "BUFF_STATE_FORAMT_STR), ret, BUFF_STATE_VARS(r));
         } else {
             DBG("io", L("NOT wrapped"));
             if (r->end == r->start) {
@@ -796,8 +823,9 @@ static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, v
             }
             ssize_t len = r->end - r->start;
             ssize_t additional_len = 0;
-            DBG("io", L("calling io-hdlr while wrapped, space-advertized %zd, additional %zd, buff-start-offset: %zd (buff_base: %p)"), len, additional_len, (ssize_t) r->buff + r->start, r->buff);
+            DBG("io", L("calling io-hdlr while wrapped, space-advertized %zd, additional %zd, buff-start-offset: %zd (buff_base: %p)"BUFF_STATE_FORAMT_STR), len, additional_len, (ssize_t) r->buff + r->start, r->buff, BUFF_STATE_VARS(r));
             ret = io_hdlr(fd, r->buff + r->start, len, &r->start, hdlr_ctx, additional_len);
+            DBG("io", L("after io-hdlr call(ret: %d): "BUFF_STATE_FORAMT_STR), ret, BUFF_STATE_VARS(r));
         }
         DBG("io", L("ret: %d, ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d }"), ret, r, r->sz, r->start, r->end, r->wraped);
     } while(CONN_IO_OK == ret);
@@ -806,15 +834,24 @@ static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, v
 
 static inline int recv_batch(int fd, void *buff, ssize_t max_sz, ssize_t *end, void *ignore, ssize_t ignore_) {
     ssize_t rcvd = recv(fd, buff, max_sz, 0);
+    DBG("io", L("rcvd: %zd bytes from fd %d, wanted to recv upto: %zd into %p"), rcvd, fd, max_sz, buff);
     if (rcvd == 0) {
+        DBG("io", L("Peer closed the connection, closing it now"));
         return CONN_KILL;
     }
     if (rcvd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return CONN_IO_OK_EXHAUSTED;
-        if (errno == ECONNREFUSED || errno == ENOTCONN) return CONN_KILL;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            DBG("io", L("recv failed as socket is not read-ready"));
+            return CONN_IO_OK_EXHAUSTED;
+        }
+        if (errno == ECONNREFUSED || errno == ENOTCONN) {
+            DBG("io", L("recv failed as connection is broken"));
+            return CONN_KILL;
+        }
+        DBG("io", L("recv failed due to some unknown error: %d"), errno);
         return CONN_UNKNOWN_ERR;
     } else {
-        end += rcvd;
+        *end += rcvd;
         return CONN_IO_OK;
     }
 }
@@ -822,19 +859,30 @@ static inline int recv_batch(int fd, void *buff, ssize_t max_sz, ssize_t *end, v
 typedef ssize_t (data_push_fn_t)(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx);
 
 static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, data_push_fn_t *data_pusher, void *hdlr_ctx) {
+    DBG("io", L("fd %d, "BUFF_STATE_FORAMT_STR", io_hdlr: %p, data_pusher: %p, ctx: %p"), fd, BUFF_STATE_VARS(r), io_hdlr, data_pusher, hdlr_ctx);
     int ret = CONN_IO_OK;
     int full = 0;
     do {
         if (r->wraped) {
-            if (r->start == r->end) full = 1;
-            ret = io_hdlr(fd, r->buff + r->end, r->start - r->end, &r->end, hdlr_ctx, 0);
+            DBG("io", L("wrapped"));
+            if (r->start == r->end) {
+                DBG("io", L("Buffer full, not calling io-handler"));
+                full = 1;
+            } else {
+                DBG("io", L("before io-hdlr call "BUFF_STATE_FORAMT_STR), BUFF_STATE_VARS(r));
+                ret = io_hdlr(fd, r->buff + r->end, r->start - r->end, &r->end, hdlr_ctx, 0);
+                DBG("io", L("after io-hdlr call(ret: %d) "BUFF_STATE_FORAMT_STR), ret, BUFF_STATE_VARS(r));
+            }
         } else {
             if (r->sz == r->end) {
+                DBG("io", L("Fill-area reached end-of-buffer, wrapping"));
                 r->end = 0;
                 r->wraped = 1;
                 continue;
             }
+            DBG("io", L("before io-hdlr call "BUFF_STATE_FORAMT_STR), BUFF_STATE_VARS(r));
             ret = io_hdlr(fd, r->buff + r->end, r->sz - r->end, &r->end, hdlr_ctx, r->start);
+            DBG("io", L("after io-hdlr call(ret: %d) "BUFF_STATE_FORAMT_STR), ret, BUFF_STATE_VARS(r));
         }
         /* try to push data, fakers like write-to-tun don't provide this, hence nullable */
         if (data_pusher != NULL) {
@@ -856,6 +904,7 @@ static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, da
                         r->start += moved;
                     }
                 }
+                DBG("io", L("data-pusher called (with wrapped buff) with len1: %zd and len2: %zd and moved: %zd "BUFF_STATE_FORAMT_STR), len1, len2, moved, BUFF_STATE_VARS(r));
             } else {
                 ssize_t len1 = r->end - r->start;
                 ssize_t moved = 0;
@@ -866,9 +915,11 @@ static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, da
                     full = 0;
                     r->start += moved;
                 }
+                DBG("io", L("data-pusher called with len1: %zd and moved: %zd "BUFF_STATE_FORAMT_STR), len1, moved, BUFF_STATE_VARS(r));
             }
         }
     } while((CONN_IO_OK == ret) || full);
+    DBG("io", L("return: %d"), ret);
     return ret;
 }
 
@@ -966,7 +1017,7 @@ static uint16_t parse_l3_packet_len(void *b1, ssize_t len1, void *b2, ssize_t le
 
 static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2) {
     assert(len1 > 0);
-    
+
     ssize_t overall_pushed = 0;
 
     int full = 0;
@@ -974,6 +1025,7 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
     do {
         uint16_t pkt_len = parse_l3_packet_len(b1, len1, b2, len2);
         if ((pkt_len == 0) || ((len1 + len2) < pkt_len)) {
+            DBG("io", L("postponing push to tun as pkg_len: %hd, len1: %zd, len2: %zd"), pkt_len, len1, len2);
             return overall_pushed;
         }
 
@@ -1004,7 +1056,9 @@ static inline ssize_t push_to_tun_ipv6(tun_tx_t *tun_tx, void *b1, ssize_t len1,
 }
 
 static ssize_t push_to_tun(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx) {
+    assert(hdlr_ctx != NULL);
     tun_tx_t *tun_tx = (tun_tx_t *) hdlr_ctx;
+    DBG("io", L("buff1: %p, len1: %zd, buff2: %p, len2: %zd"), b1, len1, b2, len2);
     uint8_t octate_1;
     assert(len1 + len2 > 0);
     if (len1 > 0) {
@@ -1012,15 +1066,20 @@ static ssize_t push_to_tun(void *b1, ssize_t len1, void *b2, ssize_t len2, void 
     } else {
         octate_1 = *(uint8_t *)b2;
     }
-    uint8_t ip_v = octate_1 >> 4;
-    if (ip_v == 4) {
-        return push_to_tun_ipv4(tun_tx, len1 > 0 ? b1 : b2, len1 > 0 ? len1 : len2, len1 > 0 ? b2 : NULL, len1 > 0 ? len2 : 0);
-    } else if (ip_v == 6) {
-        return push_to_tun_ipv6(tun_tx, len1 > 0 ? b1 : b2, len1 > 0 ? len1 : len2, len1 > 0 ? b2 : NULL, len1 > 0 ? len2 : 0);
-    } else {
-        log_crit("io", L("encountered an unknown packet-type (L3 version: %d), won't handle, will let backlog build"), ip_v);
-        return 0;
+    ssize_t pushed = 0;
+    switch (octate_1 & 0xF0) {
+    case 0x40:
+        pushed = push_to_tun_ipv4(tun_tx, len1 > 0 ? b1 : b2, len1 > 0 ? len1 : len2, len1 > 0 ? b2 : NULL, len1 > 0 ? len2 : 0);
+        DBG("io", L("IPv4, pushed: %zd"), pushed);
+        break;
+    case 0x60:
+        pushed = push_to_tun_ipv6(tun_tx, len1 > 0 ? b1 : b2, len1 > 0 ? len1 : len2, len1 > 0 ? b2 : NULL, len1 > 0 ? len2 : 0);
+        DBG("io", L("IPv6, pushed: %zd"), pushed);
+        break;
+    default:
+        log_crit("io", L("encountered an unknown packet-type (L3 protocol version: %d), won't handle, will let backlog build"), octate_1 >> 4);
     }
+    return pushed;
 }
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
@@ -1143,8 +1202,11 @@ static int read_from_tun_buff(int fd, void *to_buff, ssize_t capacity, ssize_t *
 }
 
 static ssize_t write_passthru_to_conn(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx) {
+    assert(hdlr_ctx != NULL);
     conn_bound_pkt_t *pkt = (conn_bound_pkt_t *) hdlr_ctx;
     int dest_fd = pkt->dest_fd;
+    assert(dest_fd > 0);
+    DBG("io", L("dest_fd: %d, buff1: %p, len1: %zd, buff2: %p, len2: %zd"), dest_fd, b1, len1, b2, len2);
     ssize_t written = 0;
     if (len1 > 0) {
         send_bl_batch(dest_fd, b1, len1, &written, NULL, 0);
@@ -1152,11 +1214,13 @@ static ssize_t write_passthru_to_conn(void *b1, ssize_t len1, void *b2, ssize_t 
     if ((written == len1) && len2 > 0) {
         send_bl_batch(dest_fd, b2, len2, &written, NULL, 0);
     }
+    DBG("io", L("wrote %zd bytes to sock: %d"), written, dest_fd);
     return written;
 }
 
 static inline void write_to_conn(io_ctx_t *ctx, io_sock_t *conn, tun_pkt_buff_t *pkt_buff) {
     if (conn == NULL) {
+        DBG("io", L("trying to write to unknown connection, dropping packet"));
         ctx->c_world_tx.drop_p++;
         ctx->c_world_tx.drop_b += pkt_buff->len;
         return;
@@ -1167,6 +1231,7 @@ static inline void write_to_conn(io_ctx_t *ctx, io_sock_t *conn, tun_pkt_buff_t 
     int ret = fill_ring(-1, &conn->d.conn.tx, read_from_tun_buff, write_passthru_to_conn, &pkt);
     
     if (CONN_IO_OK_NOT_ENOUGH_SPACE == ret) {
+        DBG("io", L("ring full, dropping packet"));
         ctx->c_world_tx.drop_p++;
         ctx->c_world_tx.drop_b += pkt_buff->len;
         return;
@@ -1180,12 +1245,13 @@ static inline void read_tun_and_xmit(io_sock_t *tun) {
     io_ctx_t *ctx = tun->ctx;
     tun_pkt_buff_t *pkt_buff = &tun->d.tun.r_buff;
     NET_ADDR(nw_addr);
-    uint8_t prev_ip_v = 0;
+    uint8_t prev_ip_v = 0xF0;
     uint32_t *nw_addr_ipv4 = (uint32_t *) nw_addr;
 
     do {
         pkt_buff->len = read(fd, pkt_buff->buff, pkt_buff->capacity);
-        if (pkt_buff->len < 0) {
+        DBG("io", L("read %zd bytes from tun"), pkt_buff->len);
+        if (pkt_buff->len <= 0) {
             if (errno != EAGAIN && errno != EWOULDBLOCK)
                 log_crit("io", L("Unexpected error in tun-read"));
             break;
@@ -1201,6 +1267,7 @@ static inline void read_tun_and_xmit(io_sock_t *tun) {
             *nw_addr_ipv4 = *(((uint32_t *) pkt_buff->buff) + 4);
             io_sock_t *dest_sock = batab_get(&ctx->live_sockets, nw_addr);
             write_to_conn(ctx, dest_sock, pkt_buff);
+            break;
         case 0x60: /* implement me! */
         default:
             log_crit("io", L("Unknown IP version: %d"), ip_v);
@@ -1231,18 +1298,38 @@ static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
     }
 }
 
+static void fix_broken_connections(io_ctx_t *ctx) {
+    int success, total;
+    success = total = 0;
+    passive_peer_t *peer;
+    while (NULL != (peer = ctx->disconnected_passive_peers.lh_first)) {
+        assert(peer->addr_info != NULL);
+        total++;
+        int fd = setup_outbound_connection(ctx, peer);
+        if (fd > 0) {
+            log_info("io", L("Re-connect to peer %s succesful, fd: %d"), peer->humanified_address, fd);
+            LIST_REMOVE(peer, link);
+            success++;
+        } else {
+            log_info("io", L("Failed to connect to peer %s"), peer->humanified_address);
+        }
+    }
+    log_warn("io", L("Recconnect attempt summary: %d of %d passive-peers re-connected successfully"), success, total);
+}
+
 #define MAX_POLLED_EVENTS 256
 
-int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name) {
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl) {
     int ret = -1;
     io_ctx_t *ctx;
+    time_t last_reconnect_at = time(NULL);
     if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
             int num_evts;
             struct epoll_event evts[MAX_POLLED_EVENTS];
             while ( ! do_stop) {
-                num_evts = epoll_wait(ctx->epoll_fd, evts, MAX_POLLED_EVENTS, -1);
+                num_evts = epoll_wait(ctx->epoll_fd, evts, MAX_POLLED_EVENTS, try_reconnect_itvl * 1000); /* timeout is ms */
                 if (num_evts < 0) {
                     log_warn("io", L("io-poll failed"));
                 } else {
@@ -1253,6 +1340,11 @@ int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const c
                 if (do_peer_reset) {
                     reset_peers(ctx, peer_file_path, listener_port);
                     do_peer_reset = 0;
+                }
+                time_t now = time(NULL);
+                if ((now - last_reconnect_at) > try_reconnect_itvl) {
+                    fix_broken_connections(ctx);
+                    last_reconnect_at = now;
                 }
             }
             ret = 0;

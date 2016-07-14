@@ -42,16 +42,17 @@ static void usage(void) {
 	    __progname);
 	fprintf(stderr, "Version: %s\n", PACKAGE_STRING);
 	fprintf(stderr, "\n");
-	fprintf(stderr, " -d, --debug                              be more verbose.\n");
-	fprintf(stderr, " -h, --help                               display help and exit\n");
-	fprintf(stderr, " -v, --version                            print version and exit\n");
-    fprintf(stderr, " -l, --listenerPort  <port>               listener port (should be the same value across all peers)\n");
-    fprintf(stderr, " -p, --peerList  <path>                   path to file containing list of peers (IP v4/v6 addresses or hostnames)\n");
-    fprintf(stderr, " -4, --selfIpv4  <addr>                   hosts own address as seen by peers (IP v4)\n");
-    fprintf(stderr, " -6, --selfIpv6  <addr>                   hosts own address as seen by peers (IP v6)\n");
-    fprintf(stderr, " -c, --compLvl  <compression-level>       compression level between (0: none, 1: fast ... 9: best)\n");
-    fprintf(stderr, " -s, --setName  <ipset>                   ipset set-name to be used to record peers for selectively compressing flows\n");
-    fprintf(stderr, " -u, --upScript <route-up cmd>            command for setting-up routing (run once tunnel is up)\n");
+	fprintf(stderr, " -d, --debug                                      be more verbose.\n");
+	fprintf(stderr, " -h, --help                                       display help and exit\n");
+	fprintf(stderr, " -v, --version                                    print version and exit\n");
+    fprintf(stderr, " -l, --listenerPort  <port>                       listener port (should be the same value across all peers)\n");
+    fprintf(stderr, " -p, --peerList  <path>                           path to file containing list of peers (IP v4/v6 addresses or hostnames)\n");
+    fprintf(stderr, " -4, --selfIpv4  <addr>                           hosts own address as seen by peers (IP v4)\n");
+    fprintf(stderr, " -6, --selfIpv6  <addr>                           hosts own address as seen by peers (IP v6)\n");
+    fprintf(stderr, " -c, --compLvl  <compression-level>               compression level between (0: none, 1: fast ... 9: best)\n");
+    fprintf(stderr, " -s, --setName  <ipset>                           ipset set-name to be used to record peers for selectively compressing flows\n");
+    fprintf(stderr, " -u, --upScript <route-up cmd>                    command for setting-up routing (run once tunnel is up)\n");
+    fprintf(stderr, " -r, --tryReconnectInterval <seconds>             least number of seconds to wait before re-attempting connect with failed peers\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
 }
@@ -66,6 +67,7 @@ int main(int argc, char *argv[]) {
     int listener_port = 15;
     char *ipset_name = NULL;
     char *route_up_cmd = NULL;
+    int try_reconnect_itvl = 30;
 
 	/* TODO:3001 If you want to add more options, add them here. */
 	static struct option long_options[] = {
@@ -79,10 +81,11 @@ int main(int argc, char *argv[]) {
                 { "compLvl", required_argument, 0, 'c' },
                 { "setName", required_argument, 0, 's' },
                 { "upCmd", required_argument, 0, 'u' },
+                { "tryReconnectInterval", required_argument, 0, 'r' },
                 { 0 }};
 	while (1) {
 		int option_index = 0;
-		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:",
+		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:",
 		    long_options, &option_index);
 		if (ch == -1) break;
 		switch (ch) {
@@ -126,6 +129,9 @@ int main(int argc, char *argv[]) {
             assert(route_up_cmd == NULL);
             route_up_cmd = strndup(optarg, MAX_FILE_PATH_LEN);
 			break;
+        case 'r':
+            try_reconnect_itvl = atoi(optarg);
+            break;
 		default:
 			fprintf(stderr, "unknown option `%c'\n", ch);
 			usage();
@@ -163,7 +169,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (! error) {
-        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name) != 0) error = "io loop failed";
+        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name, try_reconnect_itvl) != 0) error = "io loop failed";
     }
 
     free(self_addr_v4);

@@ -67,11 +67,11 @@ echo "$red_ip
 $green_ip
 $blue_ip" > $peer_file
 
-e red ../src/l3tc -d -d -p $peer_file -4 $red_ip -c 0 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &
+e red ../src/l3tc -d -d -p $peer_file -4 $red_ip -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &
 red_pid=$!
-e green ../src/l3tc -d -d -p $peer_file -4 $green_ip -c 0 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &
+e green ../src/l3tc -d -d -p $peer_file -4 $green_ip -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &
 green_pid=$!
-e blue ../src/l3tc -d -d -p $peer_file -4 $blue_ip -c 0 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
+e blue ../src/l3tc -d -d -p $peer_file -4 $blue_ip -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
 blue_pid=$!
 
 e red ping -c 1 $green_ip

@@ -3,7 +3,7 @@
 set -x
 set -e
 
-tc_tcp_ports=${TCP_PORTS:-80,443}
+tc_tcp_ports=${TCP_PORTS:-80,443,8080}
 tc_icmp=${ICMP:-y}
 tc_nf_mark_value=${MARK_VALUE:-1}
 tc_routing_tbl=${ROUTING_TABLE:-1}

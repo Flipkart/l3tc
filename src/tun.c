@@ -38,7 +38,7 @@ int alloc_tun(const char *tun_up_cmd, const char *ipset_name) {
 
     memset(&ifr, 0, sizeof(ifr));
 
-    ifr.ifr_flags = IFF_TUN; 
+    ifr.ifr_flags = IFF_TUN | IFF_NO_PI; 
     if(*dev)
         strncpy(ifr.ifr_name, dev, IFNAMSIZ);
 
