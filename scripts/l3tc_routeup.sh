@@ -10,7 +10,7 @@ tc_routing_tbl=${ROUTING_TABLE:-1}
 tc_ipset_name=${IPSET_NAME:-l3tc}
 
 set +e
-ipset list | xargs -n4 | grep -qF "Name: $tc_ipset_name Type: hash:ip"
+ipset list | grep -F Name: -A1 | grep '^[0-9a-zA-Z]' | xargs -n4 | grep -qF "Name: $tc_ipset_name Type: hash:ip"
 ipset_exists=$?
 set -e
 if [ $ipset_exists -eq 0 ]; then

@@ -28,6 +28,7 @@
 #include <string.h>
 #include <getopt.h>
 #include <assert.h>
+#include <signal.h>
 
 extern const char *__progname;
 
@@ -55,6 +56,12 @@ static void usage(void) {
     fprintf(stderr, " -r, --tryReconnectInterval <seconds>             least number of seconds to wait before re-attempting connect with failed peers\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
+}
+
+void wireup_signals() {
+    assert(signal(SIGINT, trigger_io_loop_stop) != SIG_ERR);
+    assert(signal(SIGTERM, trigger_io_loop_stop) != SIG_ERR);
+    assert(signal(SIGHUP, trigger_peer_reset) != SIG_ERR);
 }
 
 int main(int argc, char *argv[]) {
@@ -169,6 +176,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (! error) {
+        wireup_signals();
         if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name, try_reconnect_itvl) != 0) error = "io loop failed";
     }
 
