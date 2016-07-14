@@ -131,7 +131,7 @@ static inline void destroy_conn_sock_data(io_sock_t *sock) {
     io_ctx_t *ctx = sock->ctx;
     assert(sock->typ == conn);
     if (sock->fd >= 0) {
-        assert(batab_remove(&ctx->live_sockets, sock->d.conn.peer) == 0);
+        batab_remove(&ctx->live_sockets, sock->d.conn.peer);
         if (sock->d.conn.outbound) {
             passive_peer_t *pp = batab_get(&ctx->passive_peers, sock->d.conn.peer);
             assert(pp != NULL);
@@ -242,8 +242,7 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
     if (ts_init != NULL) {
         if (ts_init(sock, ts_init_ctx) != 0) {
             log_warn("io", L("could not successfully initialize type-specific context for fd: %d"), fd);
-            free(sock);
-            close(fd);
+            destroy_sock(sock);
             return -1;
         }
     }
@@ -476,8 +475,7 @@ static int setup_outbount_connection(passive_peer_t *peer) {
         if (connect(c_fd, r->ai_addr, r->ai_addrlen) == 0) {
             log_info("io", L("connnected as client to peer: %s"), peer->humanified_address);
         } else {
-            log_warn("io", L("failed to setup state for connection to peer: %s, will try later"), peer->humanified_address);
-            close(c_fd);
+            log_warn("io", L("failed to connect to peer: %s, will try later"), peer->humanified_address);
             return -1;
         }
     }
@@ -516,6 +514,8 @@ static int capture_passive_peer(batab_t *tab, uint8_t *nw_addr, struct addrinfo 
             }
             *do_free_addr_info = 0;
         }
+    } else {
+        log_info("io", L("passive peer entry for %s:%s already exists (ignoring)"), host_buff, port_buff);
     }
     return 0;
 }
@@ -647,6 +647,7 @@ typedef struct conn_sock_info_s conn_sock_info_t;
 
 static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     conn_sock_info_t * addr_info = (conn_sock_info_t *) _addr_info;
+    io_ctx_t *ctx = sock->ctx;
     memcpy(sock->d.conn.peer, addr_info->addr, MAX_NW_ADDR_LEN);
     sock->d.conn.af = addr_info->af;
     if (init_backlog_ring(&sock->d.conn.tx, CONN_RING_SZ) != 0) {
@@ -655,6 +656,10 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     }
     if (init_backlog_ring(&sock->d.conn.rx, CONN_RING_SZ) != 0) {
         log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
+        return -1;
+    }
+    if (batab_put(&ctx->live_sockets, sock, NULL) != 0) {
+        log_crit("io", L("couldn't wire-up lookup for sock: %d"), sock->fd);
         return -1;
     }
     return 0;
@@ -836,8 +841,8 @@ static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, da
             if (r->wraped) {
                 ssize_t len1 = r->sz - r->start;
                 ssize_t len2 = r->end;
-                ssize_t moved;
-                if (len1 == 0) {
+                ssize_t moved = 0;
+                if (len1 == 0 && len2 > 0) {
                     moved = data_pusher(r->buff, len2, NULL, 0, hdlr_ctx);
                 } else {
                     moved = data_pusher(r->buff + r->start, len1, r->buff, len2, hdlr_ctx);
@@ -853,7 +858,10 @@ static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, da
                 }
             } else {
                 ssize_t len1 = r->end - r->start;
-                ssize_t moved = data_pusher(r->buff + r->start, len1, NULL, 0, hdlr_ctx);
+                ssize_t moved = 0;
+                if (len1 > 0) {
+                    moved = data_pusher(r->buff + r->start, len1, NULL, 0, hdlr_ctx);
+                }
                 if (moved > 0) {
                     full = 0;
                     r->start += moved;
@@ -1017,14 +1025,14 @@ static ssize_t push_to_tun(void *b1, ssize_t len1, void *b2, ssize_t len2, void 
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
     if (event | EPOLLOUT) {
-        DBG("io", L("called for OUT"));
+        DBG("io", L("called for %d OUT"), conn->fd);
         if (CONN_KILL == drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL)) {
             log_warn("io", L("Send failed, connection is being dropped for sock: %d"), conn->fd); 
             destroy_sock(conn);
         }
     }
     if (event | EPOLLIN) {
-        DBG("io", L("called for IN"));
+        DBG("io", L("called for %d IN"), conn->fd);
         tun_tx_t tun_tx;
         tun_tx.fd = conn->ctx->tun_fd;
         tun_tx.backlog = conn->ctx->tun_tx;
@@ -1202,12 +1210,12 @@ static inline void read_tun_and_xmit(io_sock_t *tun) {
 
 static inline void tun_io(uint32_t event, io_sock_t *tun) {
     if (event | EPOLLOUT) {
-        DBG("io", L("called for OUT"));
+        DBG("io", L("called for %d OUT"), tun->fd);
         if (CONN_UNKNOWN_ERR == drain_ring(tun->fd, &tun->d.tun.tx, write_to_tun, &tun->d.tun.w_buff))
             log_warn("io", L("TUN write failed. Fd: %d"), tun->fd); 
     }
     if (event | EPOLLIN) {
-        DBG("io", L("called for IN"));
+        DBG("io", L("called for %d IN"), tun->fd);
         read_tun_and_xmit(tun);
     }
 }

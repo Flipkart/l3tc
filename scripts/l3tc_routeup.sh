@@ -10,13 +10,14 @@ tc_routing_tbl=${ROUTING_TABLE:-1}
 tc_ipset_name=${IPSET_NAME:-l3tc}
 
 set +e
-ipset list | grep -qF "Name: $tc_ipset_name"
+ipset list | xargs -n4 | grep -qF "Name: $tc_ipset_name Type: hash:ip"
 ipset_exists=$?
 set -e
 if [ $ipset_exists -eq 0 ]; then
-    ipset destroy $tc_ipset_name
+    ipset flush $tc_ipset_name
+else
+    ipset create $tc_ipset_name hash:ip
 fi
-ipset create $tc_ipset_name hash:ip
 tcp_pkt_mark="OUTPUT -t mangle -p tcp -m set --match-set ${tc_ipset_name} dst -m multiport --ports ${tc_tcp_ports} -j MARK --set-mark ${tc_nf_mark_value}"
 icmp_pkt_mark="OUTPUT -t mangle -p icmp -m set --match-set ${tc_ipset_name} dst -j MARK --set-mark ${tc_nf_mark_value}"
 set +e
