@@ -1046,8 +1046,9 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
 
     do {
         uint16_t pkt_len = parse_l3_packet_len(b1, len1, b2, len2);
+        DBG("io", L("Overall pushed: %zd till now, this pkg_len: %hu, len1: %zd, len2: %zd (buffers: 1: %p and 2: %p)"), overall_pushed, pkt_len, len1, len2, b1, b2);
         if ((pkt_len == 0) || ((len1 + len2) < pkt_len)) {
-            DBG("io", L("postponing push to tun as pkg_len: %hd, len1: %zd, len2: %zd"), pkt_len, len1, len2);
+            DBG("io", L("Postponing push to tun, not enough data. Overall pushed till return: %zd"), overall_pushed);
             return overall_pushed;
         }
 
@@ -1056,6 +1057,7 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
             pushed = push_pkt_to_tun_or_ring(tun_tx, b1, pkt_len, NULL, 0, &full);
             len1 -= pushed;
             b1 += pushed;
+            DBG("io", L("First buff had sufficient data to complete packet. Pushed: %zd"), pushed);
         } else {
             ssize_t buf2_to_be_pushed = (pkt_len - len1);
             assert((len2 - buf2_to_be_pushed) >= 0);
@@ -1065,8 +1067,10 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
                 len2 -= buf2_to_be_pushed;
                 b2 += buf2_to_be_pushed;
             }
+            DBG("io", L("First buff didn't have sufficient data to complete packet. Pushed: %zd (remaining now: len1: %zd, len2: %zd)"), pushed, len1, len2);
         }
         overall_pushed += pushed;
+        DBG("io", L("Overall pushed till now: %zd, full: %d"), overall_pushed, full);
     } while(! full);
 
     return overall_pushed;
