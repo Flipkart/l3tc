@@ -1020,23 +1020,6 @@ static inline ssize_t push_pkt_to_tun_or_ring(tun_tx_t *tun_tx, void *b1, ssize_
     }
 }
 
-static uint16_t parse_l3_packet_len(void *b1, ssize_t len1, void *b2, ssize_t len2) {
-    if (b1 == NULL && b2 == NULL) return 0;
-    
-    uint16_t pkt_len;
-    if (len1 >= 4) {
-        pkt_len = *((uint16_t *) b1 + 1);
-    } else if (len1 == 3 && len2 >= 1) {
-        pkt_len = (*((uint8_t *) b1 + 2)) << 8;
-        pkt_len |= *(uint8_t *) b2;
-    } else if (len1 <= 2 && (len1 + len2) >= 4) {
-        pkt_len = *(uint16_t *) b2;
-    } else {
-        pkt_len = 0;
-    }
-    return ntohs(pkt_len);
-}
-
 static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1, void *b2, ssize_t len2) {
     assert(len1 > 0);
 
@@ -1045,7 +1028,7 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
     int full = 0;
 
     do {
-        uint16_t pkt_len = parse_l3_packet_len(b1, len1, b2, len2);
+        uint16_t pkt_len = parse_ipv4_pkt_sz(b1, len1, b2, len2);
         DBG("io", L("Overall pushed: %zd till now, this pkg_len: %hu, len1: %zd, len2: %zd (buffers: 1: %p and 2: %p)"), overall_pushed, pkt_len, len1, len2, b1, b2);
         if ((pkt_len == 0) || ((len1 + len2) < pkt_len)) {
             DBG("io", L("Postponing push to tun, not enough data. Overall pushed till return: %zd"), overall_pushed);
@@ -1153,7 +1136,7 @@ static inline int write_to_tun(int fd, void *buff, ssize_t len, ssize_t *start, 
     do {
         ssize_t written = 0;
         if (wbuff->current_pkt_len == 0) { /* start of a new pkt */
-            pkt_len = parse_l3_packet_len(buff, len, NULL, 0);
+            pkt_len = parse_ipv4_pkt_sz(buff, len, NULL, 0);
             if (pkt_len > 0) {
                 if (pkt_len <= len) {
                     written = write(fd, buff, pkt_len);
