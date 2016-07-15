@@ -152,8 +152,8 @@ static inline void destroy_conn_sock_data(io_sock_t *sock) {
 
 static inline void destroy_tun_sock_data(io_sock_t *sock) {
     destroy_ring_buff(&sock->d.tun.tx);
-    free(&sock->d.tun.w_buff.buff);
-    free(&sock->d.tun.r_buff.buff);
+    free(sock->d.tun.w_buff.buff);
+    free(sock->d.tun.r_buff.buff);
 }
 
 static inline int setup_conn_route(io_sock_t *sock) {
@@ -169,8 +169,12 @@ static inline int setup_conn_route(io_sock_t *sock) {
 
     int len = snprintf(cmd_buff, sizeof(cmd_buff), "ipset add %s %s", sock->ctx->ipset_name, addr_buff);
     assert(len < (int) sizeof(cmd_buff) && len > 0);
-    
-    return system(cmd_buff);
+
+    int ret = system(cmd_buff);
+
+    DBG("io", L("Mark routed (status: %d) cmd: %s"), ret, cmd_buff);
+
+    return ret;
 }
 
 static inline int drop_conn_route(io_sock_t *sock) {
@@ -186,8 +190,12 @@ static inline int drop_conn_route(io_sock_t *sock) {
 
     int len = snprintf(cmd_buff, sizeof(cmd_buff), "ipset del %s %s", sock->ctx->ipset_name, addr_buff);
     assert(len < (int) sizeof(cmd_buff) && len > 0);
+
+    int ret = system(cmd_buff);
+
+    DBG("io", L("Unmark routed (status: %d) cmd: %s"), ret, cmd_buff);
     
-    return system(cmd_buff);
+    return ret;
 }
 
 static inline void destroy_sock(io_sock_t *sock) {
@@ -1320,8 +1328,8 @@ static void fix_broken_connections(io_ctx_t *ctx) {
     passive_peer_t *peer, *prev_peer;
     int do_remove = 0;
     for (peer = LIST_FIRST(&ctx->disconnected_passive_peers);
-         prev_peer = peer, peer = LIST_NEXT(peer, link);
-         NULL != peer) {
+         NULL != peer;
+         prev_peer = peer, peer = LIST_NEXT(peer, link)) {
         assert(peer->addr_info != NULL);
         if (do_remove) {
             LIST_REMOVE(prev_peer, link);
@@ -1336,6 +1344,9 @@ static void fix_broken_connections(io_ctx_t *ctx) {
         } else {
             log_info("io", L("Failed to connect to peer %s"), peer->humanified_address);
         }
+    }
+    if (do_remove) {
+        LIST_REMOVE(prev_peer, link);
     }
     log_warn("io", L("Recconnect attempt summary: %d of %d passive-peers re-connected successfully"), success, total);
 }
