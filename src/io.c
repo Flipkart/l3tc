@@ -1052,7 +1052,7 @@ static inline ssize_t push_to_tun_ipv4(tun_tx_t *tun_tx, void *b1, ssize_t len1,
             b1 += pushed;
         } else {
             ssize_t buf2_to_be_pushed = (pkt_len - len1);
-            assert((len2 - buf2_to_be_pushed) > 0);
+            assert((len2 - buf2_to_be_pushed) >= 0);
             pushed = push_pkt_to_tun_or_ring(tun_tx, b1, len1, b2, buf2_to_be_pushed, &full);
             if (pushed > 0) {
                 len1 = 0;
