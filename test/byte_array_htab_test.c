@@ -244,6 +244,7 @@ void test_deletion_while_iterating() {
     batab_entry_t *e;
     
     batab_foreach_do((&tab), e) {
+        assert(batab_get(&tab, ((F*)e->value)->key) != NULL);
         assert(batab_remove(&tab, ((F*)e->value)->key) == 0);
     }
 

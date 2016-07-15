@@ -96,8 +96,8 @@ struct io_ctr_s {
 typedef struct io_ctr_s io_ctr_t;
 
 struct io_ctx_s {
-    LIST_HEAD(all, io_sock_s) all_sockets;
-    batab_t live_sockets; /* to passive and active peers */
+    LIST_HEAD(all, io_sock_s) non_conns;
+    batab_t live_conns; /* to passive and active peers */
     LIST_HEAD(dpp, passive_peer_s) disconnected_passive_peers;
     batab_t passive_peers;
     int tun_fd;
@@ -114,13 +114,20 @@ static inline void destroy_sock(io_sock_t *sock);
 
 static inline void destroy_io_ctx(io_ctx_t *ctx) {
     if (ctx == NULL) return;
-    
-    batab_destory(&ctx->live_sockets);
 
-    while (ctx->all_sockets.lh_first != NULL)
-        destroy_sock(ctx->all_sockets.lh_first);
+    batab_entry_t *e;
+    batab_foreach_do((&ctx->live_conns), e) {
+        destroy_sock(e->value);
+    }
+    
+    batab_destory(&ctx->live_conns);
+
+    while (ctx->non_conns.lh_first != NULL)
+        destroy_sock(ctx->non_conns.lh_first);
 
     batab_destory(&ctx->passive_peers);
+
+    free(ctx);
 }
 
 static inline void destroy_ring_buff(ring_buff_t *ring) {
@@ -132,7 +139,7 @@ static inline void destroy_conn_sock_data(io_sock_t *sock) {
     io_ctx_t *ctx = sock->ctx;
     assert(sock->typ == conn);
     if (sock->fd >= 0) {
-        batab_remove(&ctx->live_sockets, sock->d.conn.peer);
+        batab_remove(&ctx->live_conns, sock->d.conn.peer);
         if (sock->d.conn.outbound) {
             passive_peer_t *pp = batab_get(&ctx->passive_peers, sock->d.conn.peer);
             assert(pp != NULL);
@@ -191,6 +198,8 @@ static inline void destroy_sock(io_sock_t *sock) {
         if (drop_conn_route(sock) != 0) {
             log_warn("io", L("Couldn't drop route to %d"), sock->fd);
         }
+    } else {
+        LIST_REMOVE(sock, link);
     }
     
     if (epoll_ctl(sock->ctx->epoll_fd, EPOLL_CTL_DEL, sock->fd, NULL)) {
@@ -206,8 +215,6 @@ static inline void destroy_sock(io_sock_t *sock) {
         close(sock->fd);
         sock->fd = -1;
     }
-
-    LIST_REMOVE(sock, link);
 
     free(sock);
 }
@@ -257,14 +264,14 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
         return -1;
     }
 
-    LIST_INSERT_HEAD(&ctx->all_sockets, sock, link);
-
     if (sock->typ == conn) {
         if (setup_conn_route(sock) != 0) {
             log_warn("io", L("Route-setup failed, dropping conn."));
             destroy_sock(sock);
             return -1;
         }
+    } else {
+        LIST_INSERT_HEAD(&ctx->non_conns, sock, link);
     }
 
     return 0;
@@ -311,7 +318,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
     return 0;
 }
 
-static void destroy_passive_peer(void *_pp);
+static void free_passive_peer(void *_pp);
 
 static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name) {
     int epoll_fd;
@@ -343,7 +350,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
     ctx->tun_fd = tun_fd;
     ctx->ipset_name = ipset_name;
     LIST_INIT(&ctx->disconnected_passive_peers);
-    LIST_INIT(&ctx->all_sockets);
+    LIST_INIT(&ctx->non_conns);
     if (self_addr_v4 != NULL) {
         if (inet_pton(AF_INET, self_addr_v4, ctx->self_v4) != 1 /* 1 => success */) {
             log_crit("io", L("Could not convert given IPv4 self-address (%s) to binary"), self_addr_v4);
@@ -365,12 +372,12 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
         destroy_io_ctx(ctx);
         return NULL;
     }
-    if (batab_init(&ctx->passive_peers, offsetof(passive_peer_t, addr), MAX_NW_ADDR_LEN, destroy_passive_peer, "passive-peers") != 0) {
+    if (batab_init(&ctx->passive_peers, offsetof(passive_peer_t, addr), MAX_NW_ADDR_LEN, free_passive_peer, "passive-peers") != 0) {
         log_crit("io", L("Couldn't initialize passive-peers map"));
         destroy_io_ctx(ctx);
         return NULL;
     }
-    if (batab_init(&ctx->live_sockets, offsetof(io_sock_t, d.conn.peer), MAX_NW_ADDR_LEN, NULL, "live-conn") != 0) {
+    if (batab_init(&ctx->live_conns, offsetof(io_sock_t, d.conn.peer), MAX_NW_ADDR_LEN, NULL, "live-conn") != 0) {
         log_crit("io", L("Couldn't initialize live-sockets map"));
         destroy_io_ctx(ctx);
         return NULL;
@@ -488,7 +495,7 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
         log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
-    if (batab_put(&ctx->live_sockets, sock, NULL) != 0) {
+    if (batab_put(&ctx->live_conns, sock, NULL) != 0) {
         log_crit("io", L("couldn't wire-up lookup for sock: %d"), sock->fd);
         return -1;
     }
@@ -543,10 +550,11 @@ static passive_peer_t *create_passive_peer(struct addrinfo *r, uint8_t *nw_addr)
     return pp;
 }
 
-static void destroy_passive_peer(void *_pp) {
+static void free_passive_peer(void *_pp) {
     passive_peer_t *pp = (passive_peer_t *) _pp;
     assert(pp != NULL);
     free(pp->addr_info);
+    free(pp);
 }
 
 static int capture_passive_peer(batab_t *tab, uint8_t *nw_addr, struct addrinfo *r, const char *host_buff, const char *port_buff, int *do_free_addr_info) {
@@ -558,7 +566,7 @@ static int capture_passive_peer(batab_t *tab, uint8_t *nw_addr, struct addrinfo 
         } else {
             if (batab_put(tab, pp, NULL) != 0) {
                 log_warn("io", L("Couldn't add passive-peer %s:%s"), host_buff, port_buff);
-                destroy_passive_peer(pp);
+                free_passive_peer(pp);
                 return 1;
             }
             *do_free_addr_info = 0;
@@ -579,7 +587,7 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
     NET_ADDR(nw_addr);
     batab_t updated_passive_peers;
 
-    if (batab_init(&updated_passive_peers, offsetof(passive_peer_t, addr), MAX_NW_ADDR_LEN, destroy_passive_peer, "current-passive-nw-addrs") != 0) {
+    if (batab_init(&updated_passive_peers, offsetof(passive_peer_t, addr), MAX_NW_ADDR_LEN, free_passive_peer, "current-passive-nw-addrs") != 0) {
         log_crit("io", L("failed to initialize current-passive-peers tracker"));
         return -1;
     }
@@ -713,7 +721,7 @@ static void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
 }
 
 static void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer) {
-    io_sock_t *sock = batab_get(&ctx->live_sockets, peer->addr);
+    io_sock_t *sock = batab_get(&ctx->live_conns, peer->addr);
     if (sock != NULL) destroy_sock(sock);
     passive_peer_t *pp = batab_get(&ctx->passive_peers, peer->addr);
     assert(pp != NULL);
@@ -1265,7 +1273,7 @@ static inline void read_tun_and_xmit(io_sock_t *tun) {
         case 0x40:
             assert(pkt_buff->len > 20);
             *nw_addr_ipv4 = *(((uint32_t *) pkt_buff->buff) + 4);
-            io_sock_t *dest_sock = batab_get(&ctx->live_sockets, nw_addr);
+            io_sock_t *dest_sock = batab_get(&ctx->live_conns, nw_addr);
             write_to_conn(ctx, dest_sock, pkt_buff);
             break;
         case 0x60: /* implement me! */
@@ -1298,17 +1306,32 @@ static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
     }
 }
 
+#ifndef LIST_FIRST
+#define	LIST_FIRST(head)		((head)->lh_first)
+#endif
+
+#ifndef LIST_NEXT
+#define	LIST_NEXT(elm, field)		((elm)->field.le_next)
+#endif
+
 static void fix_broken_connections(io_ctx_t *ctx) {
     int success, total;
     success = total = 0;
-    passive_peer_t *peer;
-    while (NULL != (peer = ctx->disconnected_passive_peers.lh_first)) {
+    passive_peer_t *peer, *prev_peer;
+    int do_remove = 0;
+    for (peer = LIST_FIRST(&ctx->disconnected_passive_peers);
+         prev_peer = peer, peer = LIST_NEXT(peer, link);
+         NULL != peer) {
         assert(peer->addr_info != NULL);
+        if (do_remove) {
+            LIST_REMOVE(prev_peer, link);
+            do_remove = 0;
+        }
         total++;
         int fd = setup_outbound_connection(ctx, peer);
         if (fd > 0) {
             log_info("io", L("Re-connect to peer %s succesful, fd: %d"), peer->humanified_address, fd);
-            LIST_REMOVE(peer, link);
+            do_remove = 1;
             success++;
         } else {
             log_info("io", L("Failed to connect to peer %s"), peer->humanified_address);
