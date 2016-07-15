@@ -2,6 +2,7 @@
 #include "common.h"
 #include "ba_htab.h"
 #include "log.h"
+#include "compress.h"
 
 #include <stdio.h>
 #include <sys/types.h>
@@ -66,6 +67,7 @@ struct io_sock_s {
             int af;
             int outbound;
             ring_buff_t rx, tx;
+            compress_t comp;
         } conn;
         struct {
             ring_buff_t tx;
@@ -1187,33 +1189,37 @@ static inline int write_to_tun(int fd, void *buff, ssize_t len, ssize_t *start, 
 
 struct conn_bound_pkt_s {
     tun_pkt_buff_t *pkt_buff;
-    int dest_fd;
-    ssize_t already_written;
+    io_sock_t *conn;
+    ssize_t already_consumed;
 };
 
 typedef struct conn_bound_pkt_s conn_bound_pkt_t;
 
 static int read_from_tun_buff(int fd, void *to_buff, ssize_t capacity, ssize_t *end, void *hdlr_ctx, ssize_t additional_capacity) {
     conn_bound_pkt_t *pkt = (conn_bound_pkt_t *) hdlr_ctx;
-    ssize_t available_content = pkt->pkt_buff->len - pkt->already_written;
-    ssize_t to_write = (available_content > capacity) ? capacity : available_content;
 
-    if (pkt->already_written == 0) { /* first invocation */
-        if (pkt->pkt_buff->len > (to_write + additional_capacity)) {
+    compress_t *comp = &pkt->conn->d.conn.comp;
+
+    if (pkt->already_consumed == 0) { /* first invocation */
+        if (worst_case_compressed_out_sz(comp, pkt->pkt_buff->len) > (capacity + additional_capacity)) {
             return CONN_IO_OK_NOT_ENOUGH_SPACE;
         }
+        setup_compress_input(comp, pkt->pkt_buff->buff, pkt->pkt_buff->len);
     }
 
-    memcpy(to_buff, pkt->pkt_buff->buff + pkt->already_written, to_write);
-    *end += to_write;
-    pkt->already_written += to_write;
-    return (pkt->already_written == pkt->pkt_buff->len) ? CONN_IO_OK_EXHAUSTED : CONN_IO_OK;
+    ssize_t consumed = 0;
+    ssize_t written = do_compress(comp, to_buff, capacity, &consumed);
+    
+    *end += written;
+    pkt->already_consumed += consumed;
+    
+    return (pkt->already_consumed == pkt->pkt_buff->len) ? CONN_IO_OK_EXHAUSTED : CONN_IO_OK;
 }
 
 static ssize_t write_passthru_to_conn(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx) {
     assert(hdlr_ctx != NULL);
     conn_bound_pkt_t *pkt = (conn_bound_pkt_t *) hdlr_ctx;
-    int dest_fd = pkt->dest_fd;
+    int dest_fd = pkt->conn->fd;
     assert(dest_fd > 0);
     DBG("io", L("dest_fd: %d, buff1: %p, len1: %zd, buff2: %p, len2: %zd"), dest_fd, b1, len1, b2, len2);
     ssize_t written = 0;
@@ -1235,7 +1241,7 @@ static inline void write_to_conn(io_ctx_t *ctx, io_sock_t *conn, tun_pkt_buff_t 
         return;
     }
 
-    conn_bound_pkt_t pkt = {pkt_buff, conn->fd, 0};
+    conn_bound_pkt_t pkt = {pkt_buff, conn, 0};
 
     int ret = fill_ring(-1, &conn->d.conn.tx, read_from_tun_buff, write_passthru_to_conn, &pkt);
     
