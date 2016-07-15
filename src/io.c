@@ -905,33 +905,39 @@ static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, da
             if (r->wraped) {
                 ssize_t len1 = r->sz - r->start;
                 ssize_t len2 = r->end;
+                int called = 0;
                 ssize_t moved = 0;
-                if (len1 == 0 && len2 > 0) {
-                    moved = data_pusher(r->buff, len2, NULL, 0, hdlr_ctx);
-                } else {
-                    moved = data_pusher(r->buff + r->start, len1, r->buff, len2, hdlr_ctx);
-                }
-                if (moved > 0) {
-                    full = 0;
-                    if (moved > len1) {
-                        r->start = moved - len1;
-                        r->wraped = 0;
+                if ((len1 + len2) > 0) {
+                    if (len1 == 0) {
+                        moved = data_pusher(r->buff, len2, NULL, 0, hdlr_ctx);
                     } else {
-                        r->start += moved;
+                        moved = data_pusher(r->buff + r->start, len1, r->buff, len2, hdlr_ctx);
+                    }
+                    called = 1;
+                    if (moved > 0) {
+                        full = 0;
+                        if (moved > len1) {
+                            r->start = moved - len1;
+                            r->wraped = 0;
+                        } else {
+                            r->start += moved;
+                        }
                     }
                 }
-                DBG("io", L("data-pusher called (with wrapped buff) with len1: %zd and len2: %zd and moved: %zd "BUFF_STATE_FORAMT_STR), len1, len2, moved, BUFF_STATE_VARS(r));
+                DBG("io", L("data-pusher called(%d) (with wrapped buff) with len1: %zd and len2: %zd and moved: %zd "BUFF_STATE_FORAMT_STR), called, len1, len2, moved, BUFF_STATE_VARS(r));
             } else {
                 ssize_t len1 = r->end - r->start;
                 ssize_t moved = 0;
+                int called = 0;
                 if (len1 > 0) {
+                    called = 1;
                     moved = data_pusher(r->buff + r->start, len1, NULL, 0, hdlr_ctx);
                 }
                 if (moved > 0) {
                     full = 0;
                     r->start += moved;
                 }
-                DBG("io", L("data-pusher called with len1: %zd and moved: %zd "BUFF_STATE_FORAMT_STR), len1, moved, BUFF_STATE_VARS(r));
+                DBG("io", L("data-pusher called(%d) with len1: %zd and moved: %zd "BUFF_STATE_FORAMT_STR), called, len1, moved, BUFF_STATE_VARS(r));
             }
         }
     } while((CONN_IO_OK == ret) || full);
