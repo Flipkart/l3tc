@@ -28,8 +28,8 @@
 
 #define MAX_NW_ADDR_LEN ((IPv6_ADDR_LEN > IPv4_ADDR_LEN) ? IPv6_ADDR_LEN : IPv4_ADDR_LEN)
 
-#define TUN_RING_SZ 4*1024*1024 /* 4 MB, must be greater than 64kB for IPv4, need to check limits in IPv6 */
-#define CONN_RING_SZ 128*1024 /* 128 KB */
+#define TUN_RING_SZ 1024*1024 /* 1 MB, must be greater than 64kB for IPv4, need to check limits in IPv6 */
+#define CONN_RING_SZ 128*1024 /* 128 KB, can fit atleast 2 IPv4 packets */
 
 typedef struct io_ctx_s io_ctx_t;
 typedef struct io_sock_s io_sock_t;
