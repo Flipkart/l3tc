@@ -92,7 +92,7 @@ typedef struct passive_peer_s passive_peer_t;
 #define USING_IPV6 0x2
 
 struct io_ctr_s {
-    uint64_t b, p, drop_b, drop_p;
+    uint64_t b, p;
 };
 
 typedef struct io_ctr_s io_ctr_t;
@@ -109,7 +109,7 @@ struct io_ctx_s {
     int using_af;
     ring_buff_t *tun_tx;
     const char *ipset_name;
-    io_ctr_t c_tun_rx, c_tun_tx, c_world_rx, c_world_tx;
+    io_ctr_t tx_drop, tx_partial_compress_drop;
 };
 
 static inline void destroy_sock(io_sock_t *sock);
@@ -1208,10 +1208,15 @@ static int read_from_tun_buff(int fd, void *to_buff, ssize_t capacity, ssize_t *
     }
 
     ssize_t consumed = 0;
-    ssize_t written = do_compress(comp, to_buff, capacity, &consumed);
-    
+    int complete = 0;
+    ssize_t written = do_compress(comp, to_buff, capacity, &consumed, &complete);
+
     *end += written;
     pkt->already_consumed += consumed;
+    
+    if ((! complete) && additional_capacity == 0) {
+        return CONN_KILL;
+    }
     
     return (pkt->already_consumed == pkt->pkt_buff->len) ? CONN_IO_OK_EXHAUSTED : CONN_IO_OK;
 }
@@ -1236,19 +1241,32 @@ static ssize_t write_passthru_to_conn(void *b1, ssize_t len1, void *b2, ssize_t 
 static inline void write_to_conn(io_ctx_t *ctx, io_sock_t *conn, tun_pkt_buff_t *pkt_buff) {
     if (conn == NULL) {
         DBG("io", L("trying to write to unknown connection, dropping packet"));
-        ctx->c_world_tx.drop_p++;
-        ctx->c_world_tx.drop_b += pkt_buff->len;
+        ctx->tx_drop.p++;
+        ctx->tx_drop.b += pkt_buff->len;
         return;
     }
 
     conn_bound_pkt_t pkt = {pkt_buff, conn, 0};
 
     int ret = fill_ring(-1, &conn->d.conn.tx, read_from_tun_buff, write_passthru_to_conn, &pkt);
+
+    int dropped = 0;
+
+    if (CONN_KILL == ret) {
+        ctx->tx_partial_compress_drop.p++;
+        log_warn("io", L("Partial packet-write, connection is being dropped for sock: %d"), conn->fd);
+        destroy_sock(conn);
+        dropped = 1;
+    }
     
     if (CONN_IO_OK_NOT_ENOUGH_SPACE == ret) {
         DBG("io", L("ring full, dropping packet"));
-        ctx->c_world_tx.drop_p++;
-        ctx->c_world_tx.drop_b += pkt_buff->len;
+        dropped = 1;
+    }
+
+    if (dropped) {
+        ctx->tx_drop.p++;
+        ctx->tx_drop.b += pkt_buff->len;
         return;
     }
 

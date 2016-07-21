@@ -2,7 +2,7 @@
 
 #include <assert.h>
 
-ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consumed) {
+ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consumed, int *complete) {
     assert(comp != NULL);
     z_stream *zstrm = &comp->deflate;
     assert(zstrm != NULL);
@@ -13,7 +13,9 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     do {
         ret = deflate(zstrm, Z_NO_FLUSH);
         assert(ret != Z_STREAM_ERROR);
-    } while (zstrm->avail_out != 0 && zstrm->avail_in != 0);
+    } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
+
+    *complete = (zstrm->avail_in == 0);
 
     *consumed = available_at_start - zstrm->avail_in;
     return capacity - zstrm->avail_out;
