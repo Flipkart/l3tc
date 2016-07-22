@@ -23,7 +23,7 @@ ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
     int ret;
     do {
         ret = inflate(zstrm, Z_SYNC_FLUSH);
-        assert(ret != Z_STREAM_ERROR);
+        assert(ret >= Z_OK);
     } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
     if (zstrm->avail_in == 0) {
@@ -65,7 +65,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     int ret;
     do {
         ret = deflate(zstrm, Z_SYNC_FLUSH);
-        assert(ret != Z_STREAM_ERROR);
+        assert(ret >= Z_OK);
     } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
     ssize_t remaining_capacity_after_compression = zstrm->avail_out;
@@ -76,7 +76,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         zstrm->next_out = comp->deflate_dest_buff;
         do {
             ret = deflate(zstrm, Z_NO_FLUSH);
-            assert(ret != Z_STREAM_ERROR);
+            assert(ret >= Z_OK);
         } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
         comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
     }
@@ -114,12 +114,12 @@ void setup_compress_input(compress_t *comp, void *buff, ssize_t len) {
 int init_compression_ctx(compress_t *comp, int compression_level) {
     assert(comp != NULL);
     int ret = deflateInit(&comp->deflate, compression_level);
-    if (ret != Z_OK) {
+    if (ret >= Z_OK) {
         log_crit(C_LOG, L("deflate-stream initialization failed(err: %d): %s"), ret, comp->deflate.msg);
         return -1;
     }
     ret = inflateInit(&comp->inflate);
-    if (ret != Z_OK) {
+    if (ret >= Z_OK) {
         log_crit(C_LOG, L("inflate-stream initialization failed(err: %d): %s"), ret, comp->inflate.msg);
         return -1;
     }
@@ -129,11 +129,11 @@ int init_compression_ctx(compress_t *comp, int compression_level) {
 int destroy_compression_ctx(compress_t *comp) {
     assert(comp != NULL);
     int ret = deflateEnd(&comp->deflate);
-    if (ret != Z_OK) {
+    if (ret >= Z_OK) {
         log_crit(C_LOG, L("deflate-stream destroy failed(err: %d): %s"), ret, comp->deflate.msg);
     }
     ret = inflateEnd(&comp->inflate);
-    if (ret != Z_OK) {
+    if (ret >= Z_OK) {
         log_crit(C_LOG, L("inflate-stream destroy failed(err: %d): %s"), ret, comp->inflate.msg);
     }
     return 0;
