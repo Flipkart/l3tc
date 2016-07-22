@@ -4,8 +4,8 @@
 #include <zlib.h>
 #include <stdint.h>
 
-#define COMPRESSED_SURPLUS_CONTENT_CAPACITY 4096
-#define UNCOMPRESSED_SURPLUS_CONTENT_CAPACITY 4*4096
+#define COMPRESSED_SURPLUS_CONTENT_CAPACITY 4*1024
+#define DECOMPRESSION_SRC_BUFF_CAPACITY 64*1024
 
 struct compress_s {
     z_stream deflate;
@@ -13,11 +13,14 @@ struct compress_s {
     uint32_t deflate_surplus;
 
     z_stream inflate;
-    uint8_t inflate_src_buff[UNCOMPRESSED_SURPLUS_CONTENT_CAPACITY];
-    uint32_t inflate_surplus;
+    uint8_t inflate_src_buff[DECOMPRESSION_SRC_BUFF_CAPACITY];
+    uint32_t inflatable_bytes;
+    uint32_t inflatable_bytes_offset;
 };
 
 typedef struct compress_s compress_t;
+
+ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity);
 
 ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consumed, int *complete);
 

@@ -1,8 +1,31 @@
 #include "compress.h"
 
-#include <stdint.h>
 #include <assert.h>
 #include <string.h>
+
+ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
+    assert(comp != NULL);
+    z_stream *zstrm = &comp->inflate;
+    assert(zstrm != NULL);
+    if (zstrm->avail_in == 0) {
+        zstrm->avail_in = comp->inflatable_bytes;
+        zstrm->next_in = comp->inflate_src_buff;
+    }
+    zstrm->avail_out = capacity;
+    zstrm->next_out = to;
+
+    int ret;
+    do {
+        ret = inflate(zstrm, Z_NO_FLUSH);
+        assert(ret != Z_STREAM_ERROR);
+    } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
+
+    if (zstrm->avail_in == 0) {
+        comp->inflatable_bytes = 0;
+    }
+
+    return capacity - zstrm->avail_out;
+}
 
 ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consumed, int *complete) {
     assert(comp != NULL);

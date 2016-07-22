@@ -851,30 +851,6 @@ static inline int drain_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, v
     return ret;
 }
 
-static inline int recv_batch(int fd, void *buff, ssize_t max_sz, ssize_t *end, void *ignore, ssize_t ignore_) {
-    ssize_t rcvd = recv(fd, buff, max_sz, 0);
-    DBG("io", L("rcvd: %zd bytes from fd %d, wanted to recv upto: %zd into %p"), rcvd, fd, max_sz, buff);
-    if (rcvd == 0) {
-        DBG("io", L("Peer closed the connection, closing it now"));
-        return CONN_KILL;
-    }
-    if (rcvd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            DBG("io", L("recv failed as socket is not read-ready"));
-            return CONN_IO_OK_EXHAUSTED;
-        }
-        if (errno == ECONNREFUSED || errno == ENOTCONN) {
-            DBG("io", L("recv failed as connection is broken"));
-            return CONN_KILL;
-        }
-        DBG("io", L("recv failed due to some unknown error: %d"), errno);
-        return CONN_UNKNOWN_ERR;
-    } else {
-        *end += rcvd;
-        return CONN_IO_OK;
-    }
-}
-
 typedef ssize_t (data_push_fn_t)(void *b1, ssize_t len1, void *b2, ssize_t len2, void *hdlr_ctx);
 
 static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, data_push_fn_t *data_pusher, void *hdlr_ctx) {
@@ -955,6 +931,7 @@ static inline int ring_empty(ring_buff_t *r) {
 struct tun_tx_s {
     ring_buff_t *backlog;
     int fd;
+    compress_t *comp;
 };
 
 typedef struct tun_tx_s tun_tx_t;
@@ -1094,6 +1071,52 @@ static ssize_t push_to_tun(void *b1, ssize_t len1, void *b2, ssize_t len2, void 
     return pushed;
 }
 
+static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize_t *end, void *tun_tx_, ssize_t ignore_) {
+    assert(tun_tx_ != NULL);
+    tun_tx_t *tun_tx = (tun_tx_t *) tun_tx_;
+    compress_t *comp = tun_tx->comp;
+
+    ssize_t written = 0;
+
+    if (comp->inflatable_bytes > 0) {
+        written = do_decompress(comp, buff, max_sz);
+        DBG("io", L("decompressed (surplus) %zd bytes of conn: %d (total buff available was: %zd)"), written, fd, max_sz);
+        *end += written;
+        assert(max_sz - written >= 0);
+        if (max_sz - written == 0) {
+            return CONN_IO_OK;
+        }
+    }
+
+    assert(0 == comp->inflatable_bytes);
+    
+    ssize_t rcvd_compressed = recv(fd, comp->inflate_src_buff, DECOMPRESSION_SRC_BUFF_CAPACITY, 0);
+    DBG("io", L("rcvd(compressed): %zd bytes from fd %d, wanted to recv upto: %zd into %p"), rcvd_compressed, fd, max_sz, buff);
+    if (rcvd_compressed == 0) {
+        DBG("io", L("Peer closed the connection, closing it now"));
+        return CONN_KILL;
+    }
+    if (rcvd_compressed < 0) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            DBG("io", L("recv failed as socket is not read-ready"));
+            return CONN_IO_OK_EXHAUSTED;
+        }
+        if (errno == ECONNREFUSED || errno == ENOTCONN) {
+            DBG("io", L("recv failed as connection is broken"));
+            return CONN_KILL;
+        }
+        DBG("io", L("recv failed due to some unknown error: %d"), errno);
+        return CONN_UNKNOWN_ERR;
+    }
+    comp->inflatable_bytes = rcvd_compressed;
+
+    ssize_t decompressed = do_decompress(comp, buff + written, max_sz - written);
+    DBG("io", L("decompressed freshly read %zd bytes of conn: %d (total buff available was: %zd)"), decompressed, fd, max_sz - written);
+    *end += decompressed;
+    assert((written + decompressed == max_sz) || (comp->inflatable_bytes == 0));
+    return CONN_IO_OK;
+}
+
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
     if (event | EPOLLOUT) {
         DBG("io", L("called for %d OUT"), conn->fd);
@@ -1107,7 +1130,8 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
         tun_tx_t tun_tx;
         tun_tx.fd = conn->ctx->tun_fd;
         tun_tx.backlog = conn->ctx->tun_tx;
-        if (CONN_KILL == fill_ring(conn->fd, &conn->d.conn.rx, recv_batch, push_to_tun, &tun_tx)) {
+        tun_tx.comp = &conn->d.conn.comp;
+        if (CONN_KILL == fill_ring(conn->fd, &conn->d.conn.rx, recv_compressed_data, push_to_tun, &tun_tx)) {
             log_warn("io", L("Recv failed, connection id being dropped for sock: %d"), conn->fd);
             destroy_sock(conn);
         }
