@@ -93,11 +93,9 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
 
     *consumed = available_at_start - zstrm->avail_in;
 
-    ssize_t total_out = capacity - bytes_directly_written;
+    DBG(C_LOG, L("compress(%p) [complete: %d] overall %zd bytes => %zd bytes"), comp, *complete, *consumed, bytes_directly_written);
 
-    DBG(C_LOG, L("compress(%p) [complete: %d] overall %zd bytes => %zd bytes"), comp, *complete, *consumed, total_out);
-
-    return total_out;
+    return bytes_directly_written;
 }
 
 ssize_t worst_case_compressed_out_sz(compress_t *comp, ssize_t len) {
