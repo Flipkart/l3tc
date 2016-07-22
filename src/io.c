@@ -4,6 +4,7 @@
 #include "log.h"
 #include "compress.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
