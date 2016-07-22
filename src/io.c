@@ -1098,7 +1098,7 @@ static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize
     assert(0 == comp->inflatable_bytes);
     
     ssize_t rcvd_compressed = recv(fd, comp->inflate_src_buff, DECOMPRESSION_SRC_BUFF_CAPACITY, 0);
-    DBG("io", L("rcvd(compressed): %zd bytes from fd %d, wanted to recv upto: %zd into %p"), rcvd_compressed, fd, DECOMPRESSION_SRC_BUFF_CAPACITY, comp->inflate_src_buff);
+    DBG("io", L("rcvd(compressed): %zd bytes from fd %d, wanted to recv upto: %u into %p"), rcvd_compressed, fd, DECOMPRESSION_SRC_BUFF_CAPACITY, comp->inflate_src_buff);
     if (0 == rcvd_compressed) {
         DBG("io", L("Peer closed the connection, closing it now"));
         return CONN_KILL;

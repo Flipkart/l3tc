@@ -26,6 +26,12 @@ extern int debug;
 #define DBG                                     \
     if (debug > 2) log_debug
 
+#define assertf(pred, subsystem, format_str, ...)                       \
+    if(!(pred)) {                                                       \
+        log_crit(subsystem, format_str, ##__VA_ARGS__);                 \
+        assert(pred);                                                   \
+    }
+
 
 /* log.c */
 void             log_init(int, const char *);

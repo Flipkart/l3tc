@@ -23,7 +23,7 @@ ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
     int ret;
     do {
         ret = inflate(zstrm, Z_SYNC_FLUSH);
-        assert(ret >= Z_OK);
+        assertf(ret >= Z_OK, C_LOG, L("inflate return: %d"), ret);
     } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
     if (zstrm->avail_in == 0) {
@@ -49,14 +49,14 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         remaining_capacity -= data_copied_from_buffer;
         DBG(C_LOG, L("compress(%p) copied %zd decompressed surplus (remaining surplus: %u, remaining dest capacity: %zd) bytes over to buff %p"), comp, data_copied_from_buffer, comp->deflate_surplus, remaining_capacity, to);
     }
-    assert(remaining_capacity >= 0);
+    assertf(remaining_capacity >= 0, C_LOG, L("remaining capacity was: %zd"), remaining_capacity);
     if (0 == remaining_capacity) {
         *complete = 0;
         *consumed = 0;
         DBG(C_LOG, L("compress(%p) ran out of space to write to, still has surplus: %u"), comp, comp->deflate_surplus);
         return data_copied_from_buffer;
     }
-    assert(comp->deflate_surplus == 0);
+    assertf(comp->deflate_surplus == 0, C_LOG, L("deflate surplus was: %zd"), comp->deflate_surplus);
     z_stream *zstrm = &comp->deflate;
     assert(zstrm != NULL);
     zstrm->avail_out = remaining_capacity;
@@ -65,7 +65,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     int ret;
     do {
         ret = deflate(zstrm, Z_SYNC_FLUSH);
-        assert(ret >= Z_OK);
+        assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
     } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
     ssize_t remaining_capacity_after_compression = zstrm->avail_out;
@@ -76,7 +76,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         zstrm->next_out = comp->deflate_dest_buff;
         do {
             ret = deflate(zstrm, Z_NO_FLUSH);
-            assert(ret >= Z_OK);
+            assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
         } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
         comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
     }
