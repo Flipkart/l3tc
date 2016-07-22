@@ -1,7 +1,10 @@
 #include "compress.h"
+#include "log.h"
 
 #include <assert.h>
 #include <string.h>
+
+#define C_LOG "compression"
 
 ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
     assert(comp != NULL);
@@ -81,5 +84,35 @@ void setup_compress_input(compress_t *comp, void *buff, ssize_t len) {
     assert(0 == zstrm->avail_in);
     zstrm->avail_in = len;
     zstrm->next_in = buff;
+}
+
+int init_compression_ctx(compress_t *comp, int compression_level) {
+    assert(comp != NULL);
+    int ret = deflateInit(&comp->deflate, compression_level);
+    if (ret != Z_OK) {
+        log_crit(C_LOG, L("deflate-stream initialization failed(err: %d): %s"), ret, comp->deflate.msg);
+        return -1;
+    }
+    ret = inflateInit(&comp->inflate);
+    if (ret != Z_OK) {
+        log_crit(C_LOG, L("inflate-stream initialization failed(err: %d): %s"), ret, comp->inflate.msg);
+        return -1;
+    }
+    return 0;
+}
+
+int destroy_compression_ctx(compress_t *comp) {
+    assert(comp != NULL);
+    int ret = deflateEnd(&comp->deflate);
+    if (ret != Z_OK) {
+        log_crit(C_LOG, L("deflate-stream destroy failed(err: %d): %s"), ret, comp->deflate.msg);
+        return -1;
+    }
+    ret = inflateEnd(&comp->inflate);
+    if (ret != Z_OK) {
+        log_crit(C_LOG, L("inflate-stream destroy failed(err: %d): %s"), ret, comp->inflate.msg);
+        return -1;
+    }
+    return 0;
 }
 

@@ -111,6 +111,7 @@ struct io_ctx_s {
     ring_buff_t *tun_tx;
     const char *ipset_name;
     io_ctr_t tx_drop, tx_partial_compress_drop;
+    int compression_level;
 };
 
 static inline void destroy_sock(io_sock_t *sock);
@@ -141,6 +142,7 @@ static inline void destroy_ring_buff(ring_buff_t *ring) {
 static inline void destroy_conn_sock_data(io_sock_t *sock) {
     io_ctx_t *ctx = sock->ctx;
     assert(sock->typ == conn);
+    destroy_compression_ctx(&sock->d.conn.comp);
     if (sock->fd >= 0) {
         batab_remove(&ctx->live_conns, sock->d.conn.peer);
         if (sock->d.conn.outbound) {
@@ -331,7 +333,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
 
 static void free_passive_peer(void *_pp);
 
-static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name) {
+static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name, int compression_level) {
     int epoll_fd;
     
 #	if defined(EPOLL_CLOEXEC) && defined(HAVE_EPOLL_CREATE1)
@@ -357,6 +359,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
         return NULL;
     }
 
+    ctx->compression_level = compression_level;
     ctx->epoll_fd = epoll_fd;
     ctx->tun_fd = tun_fd;
     ctx->ipset_name = ipset_name;
@@ -508,6 +511,10 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     }
     if (batab_put(&ctx->live_conns, sock, NULL) != 0) {
         log_crit("io", L("couldn't wire-up lookup for sock: %d"), sock->fd);
+        return -1;
+    }
+    if (init_compression_ctx(&sock->d.conn.comp, ctx->compression_level) != 0) {
+        log_crit("io", L("couldn't initialize compression for sock: %d"), sock->fd);
         return -1;
     }
     return 0;
@@ -1395,11 +1402,11 @@ static void fix_broken_connections(io_ctx_t *ctx) {
 
 #define MAX_POLLED_EVENTS 256
 
-int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl) {
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl, int compression_level) {
     int ret = -1;
     io_ctx_t *ctx;
     time_t last_reconnect_at = time(NULL);
-    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name)) != NULL) {
+    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name, compression_level)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
             int num_evts;

@@ -5,7 +5,7 @@
 #  include <config.h>
 #endif
 
-int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconect_interval);
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconect_interval, int compression_level);
 
 void trigger_peer_reset();
 

@@ -7,6 +7,8 @@
 #define COMPRESSED_SURPLUS_CONTENT_CAPACITY 4*1024
 #define DECOMPRESSION_SRC_BUFF_CAPACITY 64*1024
 
+#define DEFAULT_COMPRESSION_LEVEL Z_DEFAULT_COMPRESSION
+
 struct compress_s {
     z_stream deflate;
     uint8_t deflate_dest_buff[COMPRESSED_SURPLUS_CONTENT_CAPACITY];
@@ -19,6 +21,10 @@ struct compress_s {
 };
 
 typedef struct compress_s compress_t;
+
+int init_compression_ctx(compress_t *comp, int compression_level);
+
+int destroy_compression_ctx(compress_t *comp);
 
 ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity);
 

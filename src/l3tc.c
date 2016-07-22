@@ -177,7 +177,7 @@ int main(int argc, char *argv[]) {
 
     if (! error) {
         wireup_signals();
-        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name, try_reconnect_itvl) != 0) error = "io loop failed";
+        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name, try_reconnect_itvl, compression_level) != 0) error = "io loop failed";
     }
 
     free(self_addr_v4);
