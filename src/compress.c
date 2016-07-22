@@ -32,7 +32,7 @@ ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
 
     ssize_t decompressed_out = capacity - zstrm->avail_out;
 
-    DBG(C_LOG, L("decompress(%p) %zd bytes (unhandled: %ud) => %zd bytes (remaining capacity: %ud) (dest buff: %p (capacity: %zd))"), \
+    DBG(C_LOG, L("decompress(%p) %zd bytes (unhandled: %u) => %zd bytes (remaining capacity: %u) (dest buff: %p (capacity: %zd))"), \
         comp, available_at_start - zstrm->avail_in, zstrm->avail_in, decompressed_out, zstrm->avail_out, to, capacity);
 
     return decompressed_out;
@@ -47,13 +47,13 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         memcpy(to, comp->deflate_dest_buff, data_copied_from_buffer);
         comp->deflate_surplus -= data_copied_from_buffer;
         remaining_capacity -= data_copied_from_buffer;
-        DBG(C_LOG, L("compress(%p) copied %zd decompressed surplus (remaining surplus: %ud, remaining dest capacity: %zd) bytes over to buff %p"), comp, data_copied_from_buffer, comp->deflate_surplus, remaining_capacity, to);
+        DBG(C_LOG, L("compress(%p) copied %zd decompressed surplus (remaining surplus: %u, remaining dest capacity: %zd) bytes over to buff %p"), comp, data_copied_from_buffer, comp->deflate_surplus, remaining_capacity, to);
     }
     assert(remaining_capacity >= 0);
     if (0 == remaining_capacity) {
         *complete = 0;
         *consumed = 0;
-        DBG(C_LOG, L("compress(%p) ran out of space to write to, still has surplus: %ud"), comp, comp->deflate_surplus);
+        DBG(C_LOG, L("compress(%p) ran out of space to write to, still has surplus: %u"), comp, comp->deflate_surplus);
         return data_copied_from_buffer;
     }
     assert(comp->deflate_surplus == 0);
@@ -81,7 +81,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
     }
 
-    DBG(C_LOG, L("compress(%p) %zd bytes (handled directly: %zd, handled towards surplus buff: %zd, unhandled: %ud) => %zd bytes (actual dest: %zd bytes (remaining capacity: %zd), surplus buff: %zd bytes (remaining capacity: %ud)) [surplus buildup: %ud]"),
+    DBG(C_LOG, L("compress(%p) %zd bytes (handled directly: %zd, handled towards surplus buff: %zd, unhandled: %u) => %zd bytes (actual dest: %zd bytes (remaining capacity: %zd), surplus buff: %zd bytes (remaining capacity: %u)) [surplus buildup: %u]"),
         comp,
         available_at_start - zstrm->avail_in, available_at_start - surplus_input, surplus_input - zstrm->avail_in, zstrm->avail_in,
         remaining_capacity - zstrm->avail_out, remaining_capacity - remaining_capacity_after_compression, remaining_capacity_after_compression, remaining_capacity_after_compression - zstrm->avail_out, zstrm->avail_out, comp->deflate_surplus);
