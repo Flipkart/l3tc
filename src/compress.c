@@ -106,12 +106,10 @@ int destroy_compression_ctx(compress_t *comp) {
     int ret = deflateEnd(&comp->deflate);
     if (ret != Z_OK) {
         log_crit(C_LOG, L("deflate-stream destroy failed(err: %d): %s"), ret, comp->deflate.msg);
-        return -1;
     }
     ret = inflateEnd(&comp->inflate);
     if (ret != Z_OK) {
         log_crit(C_LOG, L("inflate-stream destroy failed(err: %d): %s"), ret, comp->inflate.msg);
-        return -1;
     }
     return 0;
 }
