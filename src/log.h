@@ -32,6 +32,7 @@ extern int debug;
         assert(pred);                                                   \
     }
 
+#define DEBUG_LOG_ENABLED (debug > 2)
 
 /* log.c */
 void             log_init(int, const char *);
