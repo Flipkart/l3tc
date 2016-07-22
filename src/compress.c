@@ -114,12 +114,12 @@ void setup_compress_input(compress_t *comp, void *buff, ssize_t len) {
 int init_compression_ctx(compress_t *comp, int compression_level) {
     assert(comp != NULL);
     int ret = deflateInit(&comp->deflate, compression_level);
-    if (ret >= Z_OK) {
+    if (ret < Z_OK) {
         log_crit(C_LOG, L("deflate-stream initialization failed(err: %d): %s"), ret, comp->deflate.msg);
         return -1;
     }
     ret = inflateInit(&comp->inflate);
-    if (ret >= Z_OK) {
+    if (ret < Z_OK) {
         log_crit(C_LOG, L("inflate-stream initialization failed(err: %d): %s"), ret, comp->inflate.msg);
         return -1;
     }
@@ -129,11 +129,11 @@ int init_compression_ctx(compress_t *comp, int compression_level) {
 int destroy_compression_ctx(compress_t *comp) {
     assert(comp != NULL);
     int ret = deflateEnd(&comp->deflate);
-    if (ret >= Z_OK) {
+    if (ret < Z_OK) {
         log_crit(C_LOG, L("deflate-stream destroy failed(err: %d): %s"), ret, comp->deflate.msg);
     }
     ret = inflateEnd(&comp->inflate);
-    if (ret >= Z_OK) {
+    if (ret < Z_OK) {
         log_crit(C_LOG, L("inflate-stream destroy failed(err: %d): %s"), ret, comp->inflate.msg);
     }
     return 0;
