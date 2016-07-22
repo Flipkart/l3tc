@@ -22,7 +22,7 @@ ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
 
     int ret;
     do {
-        ret = inflate(zstrm, Z_NO_FLUSH);
+        ret = inflate(zstrm, Z_SYNC_FLUSH);
         assert(ret != Z_STREAM_ERROR);
     } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
@@ -64,7 +64,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     ssize_t available_at_start = zstrm->avail_in;
     int ret;
     do {
-        ret = deflate(zstrm, Z_NO_FLUSH);
+        ret = deflate(zstrm, Z_SYNC_FLUSH);
         assert(ret != Z_STREAM_ERROR);
     } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
