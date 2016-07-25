@@ -598,13 +598,14 @@ static int capture_passive_peer(batab_t *tab, uint8_t *nw_addr, struct addrinfo 
 static void disconnect_and_discard_passive_peer(io_ctx_t *ctx, passive_peer_t *peer);
 static void connect_and_add_passive_peer(io_ctx_t *ctx, passive_peer_t *peer);
 
-static void identify_peer_port(const char *peer_str, char *port_dest_buff, size_t port_dest_sz, const char *default_port) {
-    const char *port_frag_start = strchr(peer_str, ':');
+static void separate_peer_port(char *peer_str, char *port_dest_buff, size_t port_dest_sz, const char *default_port) {
+    char *port_frag_start = strchr(peer_str, ':');
     if (port_frag_start == NULL) {
         strncpy(port_dest_buff, default_port, port_dest_sz);
     } else {
+        *port_frag_start = '\0';
         port_frag_start++;
-        assertf(strlen(port_frag_start) < port_dest_sz, "io", "port-number should be smaller than %d (was: '%s' which is %d chars)", port_dest_sz, port_frag_start, strlen(port_frag_start));
+        assertf(strlen(port_frag_start) < port_dest_sz, "io", "port-number should be smaller than %zd (was: '%s' which is %zd chars)", port_dest_sz, port_frag_start, strlen(port_frag_start));
         strncpy(port_dest_buff, port_frag_start, port_dest_sz);
     }
 }
@@ -638,7 +639,7 @@ static int reset_peers(io_ctx_t *ctx, const char* peer_file_path, int expected_p
         char *pos;
         if ((pos=strchr(peer, '\n')) != NULL)
             *pos = '\0';
-        identify_peer_port(peer, port_buff, sizeof(port_buff), default_port_buff);
+        separate_peer_port(peer, port_buff, sizeof(port_buff), default_port_buff);
         res = NULL;
         if (getaddrinfo(peer, port_buff, &hints, &res) != 0) {
             log_warn("io", L("ignoring peer: %s"), peer);
