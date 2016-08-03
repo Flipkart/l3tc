@@ -1172,6 +1172,10 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
             destroy_sock(conn);
         }
     }
+    if ((event | EPOLLRDHUP)) {
+        log_warn("io", L("Connection closed, connection id being dropped for sock: %d"), conn->fd);
+        destroy_sock(conn);
+    }
 }
 
 static inline int expand_tun_wbuff_if_necessary(tun_pkt_buff_t *wbuff, ssize_t additional_space_required) {
