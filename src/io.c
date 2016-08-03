@@ -1366,6 +1366,7 @@ static inline void tun_io(uint32_t event, io_sock_t *tun) {
 }
 
 static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
+    DBG("io", L("event: %xu for fd: %d (typ: %d)"), event, sock->fd, sock->typ);
     if (sock->typ == tun) {
         tun_io(event, sock);
     } else if (sock->typ == conn) {
