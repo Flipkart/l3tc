@@ -268,7 +268,7 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
         }
     }
 
-    sock->evt.events = EPOLLIN|EPOLLOUT|EPOLLHUP|EPOLLET;
+    sock->evt.events = EPOLLIN|EPOLLOUT|EPOLLHUP|EPOLLET|EPOLLRDHUP;
     sock->evt.data.ptr = sock;
     
     if (epoll_ctl(ctx->epoll_fd, EPOLL_CTL_ADD, sock->fd, &sock->evt) != 0) {
@@ -806,6 +806,7 @@ static inline int do_accept(io_sock_t *listener_sock) {
 #define CONN_KILL -1
 #define CONN_UNKNOWN_ERR -2
 #define CONN_IO_OK_NOT_ENOUGH_SPACE -3
+#define CONN_OTHER_TRANSIENT_ERRORS -4
 
 static inline int connection_practically_dead(int io_status) {
     return CONN_KILL == io_status || CONN_UNKNOWN_ERR == io_status;
@@ -822,6 +823,10 @@ static inline int send_bl_batch(int fd, void *buff, ssize_t len, ssize_t *start,
         if (errno == ECONNRESET || errno == ENOTCONN || errno == EPIPE) {
             DBG("io", L("send failed as connection is broken"));
             return CONN_KILL;
+        }
+        if (errno == EINVAL) {
+            DBG("io", L("send failed as connection got EINVAL"));
+            return CONN_OTHER_TRANSIENT_ERRORS;
         }
         return CONN_UNKNOWN_ERR;
     } else {
@@ -1128,6 +1133,10 @@ static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize
         if (errno == ECONNREFUSED || errno == ENOTCONN) {
             DBG("io", L("recv failed as connection is broken"));
             return CONN_KILL;
+        }
+        if (errno == EINVAL) {
+            DBG("io", L("recv failed as connection got EINVAL"));
+            return CONN_OTHER_TRANSIENT_ERRORS;
         }
         DBG("io", L("recv failed due to some unknown error: %d"), errno);
         return CONN_UNKNOWN_ERR;
