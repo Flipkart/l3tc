@@ -807,6 +807,10 @@ static inline int do_accept(io_sock_t *listener_sock) {
 #define CONN_UNKNOWN_ERR -2
 #define CONN_IO_OK_NOT_ENOUGH_SPACE -3
 
+static inline int connection_practically_dead(int io_status) {
+    return CONN_KILL == io_status || CONN_UNKNOWN_ERR == io_status;
+}
+
 static inline int send_bl_batch(int fd, void *buff, ssize_t len, ssize_t *start, void *ignore, ssize_t ignore_) {
     ssize_t sent = send(fd, buff, len, MSG_NOSIGNAL);
     DBG("io", L("sent: %zd bytes to fd %d, wanted to send: %zd from %p"), sent, fd, len, buff);
@@ -1138,9 +1142,11 @@ static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize
 }
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
+    int ret;
     if (event | EPOLLOUT) {
         DBG("io", L("called for %d OUT"), conn->fd);
-        if (CONN_KILL == drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL)) {
+        ret = drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL);
+        if (connection_practically_dead(ret)) {
             log_warn("io", L("Send failed, connection is being dropped for sock: %d"), conn->fd); 
             destroy_sock(conn);
         }
@@ -1151,7 +1157,8 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
         tun_tx.fd = conn->ctx->tun_fd;
         tun_tx.backlog = conn->ctx->tun_tx;
         tun_tx.comp = &conn->d.conn.comp;
-        if (CONN_KILL == fill_ring(conn->fd, &conn->d.conn.rx, recv_compressed_data, push_to_tun, &tun_tx)) {
+        ret = fill_ring(conn->fd, &conn->d.conn.rx, recv_compressed_data, push_to_tun, &tun_tx);
+        if (connection_practically_dead(ret)) {
             log_warn("io", L("Recv failed, connection id being dropped for sock: %d"), conn->fd);
             destroy_sock(conn);
         }
@@ -1297,7 +1304,7 @@ static inline void write_to_conn(io_ctx_t *ctx, io_sock_t *conn, tun_pkt_buff_t 
 
     int dropped = 0;
 
-    if (CONN_KILL == ret) {
+    if (connection_practically_dead(ret)) {
         ctx->tx_partial_compress_drop.p++;
         log_warn("io", L("Partial packet-write, connection is being dropped for sock: %d"), conn->fd);
         destroy_sock(conn);
@@ -1366,7 +1373,7 @@ static inline void tun_io(uint32_t event, io_sock_t *tun) {
 }
 
 static inline void handle_io_evt(uint32_t event, io_sock_t *sock) {
-    DBG("io", L("event: %xu for fd: %d (typ: %d)"), event, sock->fd, sock->typ);
+    DBG("io", L("event: %x for fd: %d (typ: %d)"), event, sock->fd, sock->typ);
     if (sock->typ == tun) {
         tun_io(event, sock);
     } else if (sock->typ == conn) {
