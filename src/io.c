@@ -1152,7 +1152,7 @@ static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
     int ret;
-    if (event | EPOLLOUT) {
+    if (event & EPOLLOUT) {
         DBG("io", L("called for %d OUT"), conn->fd);
         ret = drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL);
         if (connection_practically_dead(ret)) {
@@ -1160,7 +1160,7 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
             destroy_sock(conn);
         }
     }
-    if (event | EPOLLIN) {
+    if (event & EPOLLIN) {
         DBG("io", L("called for %d IN"), conn->fd);
         tun_tx_t tun_tx;
         tun_tx.fd = conn->ctx->tun_fd;
@@ -1172,7 +1172,7 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
             destroy_sock(conn);
         }
     }
-    if ((event | EPOLLRDHUP)) {
+    if (event & (EPOLLRDHUP | EPOLLHUP)) {
         log_warn("io", L("Connection closed, connection id being dropped for sock: %d"), conn->fd);
         destroy_sock(conn);
     }
@@ -1374,12 +1374,12 @@ static inline void read_tun_and_xmit(io_sock_t *tun) {
 }
 
 static inline void tun_io(uint32_t event, io_sock_t *tun) {
-    if (event | EPOLLOUT) {
+    if (event & EPOLLOUT) {
         DBG("io", L("called for %d OUT"), tun->fd);
         if (CONN_UNKNOWN_ERR == drain_ring(tun->fd, &tun->d.tun.tx, write_to_tun, &tun->d.tun.w_buff))
             log_warn("io", L("TUN write failed. Fd: %d"), tun->fd); 
     }
-    if (event | EPOLLIN) {
+    if (event & EPOLLIN) {
         DBG("io", L("called for %d IN"), tun->fd);
         read_tun_and_xmit(tun);
     }
