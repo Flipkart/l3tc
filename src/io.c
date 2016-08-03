@@ -177,7 +177,7 @@ static inline int setup_conn_route(io_sock_t *sock) {
 
     int ret = system(cmd_buff);
 
-    DBG("io", L("Mark routed (status: %d) cmd: %s"), ret, cmd_buff);
+    log_warn("io", L("Mark routed (status: %d) cmd: %s"), ret, cmd_buff);
 
     return ret;
 }
@@ -198,7 +198,7 @@ static inline int drop_conn_route(io_sock_t *sock) {
 
     int ret = system(cmd_buff);
 
-    DBG("io", L("Unmark routed (status: %d) cmd: %s"), ret, cmd_buff);
+    log_warn("io", L("Unmark routed (status: %d) cmd: %s"), ret, cmd_buff);
     
     return ret;
 }
@@ -286,6 +286,8 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
     } else {
         LIST_INSERT_HEAD(&ctx->non_conns, sock, link);
     }
+
+    log_warn("io", L("new fd added: %d (typ: %d)"), fd, typ);
 
     return 0;
 }
