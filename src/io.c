@@ -11,6 +11,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <netinet/tcp.h>
 #include <sys/epoll.h>
 #include <sys/queue.h>
 #include <assert.h>
@@ -32,6 +33,9 @@
 
 #define TUN_RING_SZ 1024*1024 /* 1 MB, must be greater than 64kB for IPv4, need to check limits in IPv6 */
 #define CONN_RING_SZ 128*1024 /* 128 KB, can fit atleast 2 IPv4 packets */
+
+#define DISABLE_DELAYED_ACK 2
+#define DISABLE_NAGLE_ALGO 1
 
 typedef struct io_ctx_s io_ctx_t;
 typedef struct io_sock_s io_sock_t;
@@ -93,7 +97,7 @@ typedef struct passive_peer_s passive_peer_t;
 #define USING_IPV6 0x2
 
 struct io_ctr_s {
-    uint64_t b, p;
+    uint32_t b, p;
 };
 
 typedef struct io_ctr_s io_ctr_t;
@@ -110,6 +114,7 @@ struct io_ctx_s {
     int using_af;
     ring_buff_t *tun_tx;
     const char *ipset_name;
+    int low_lat_mode;
     io_ctr_t tx_drop, tx_partial_compress_drop;
     int compression_level;
 };
@@ -335,7 +340,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
 
 static void free_passive_peer(void *_pp);
 
-static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name, int compression_level) {
+static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name, int compression_level, int low_latency_aggressiveness) {
     int epoll_fd;
     
 #	if defined(EPOLL_CLOEXEC) && defined(HAVE_EPOLL_CREATE1)
@@ -365,6 +370,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
     ctx->epoll_fd = epoll_fd;
     ctx->tun_fd = tun_fd;
     ctx->ipset_name = ipset_name;
+    ctx->low_lat_mode = low_latency_aggressiveness;
     LIST_INIT(&ctx->disconnected_passive_peers);
     LIST_INIT(&ctx->non_conns);
     if (self_addr_v4 != NULL) {
@@ -518,6 +524,11 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     if (init_compression_ctx(&sock->d.conn.comp, ctx->compression_level) != 0) {
         log_crit("io", L("couldn't initialize compression for sock: %d"), sock->fd);
         return -1;
+    }
+    if (sock->ctx->low_lat_mode >= DISABLE_NAGLE_ALGO) {
+        if (setsockopt(sock->fd, IPPROTO_TCP, TCP_NODELAY, (int[]){1}, sizeof(int)) != 0) {
+            log_warn("io", L("Failed to turn-off Nagle's algorithm for sock: %d"), sock->fd);
+        }
     }
     return 0;
 }
@@ -1154,12 +1165,14 @@ static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
     int ret;
+    int alive = 1;
     if (event & EPOLLOUT) {
         DBG("io", L("called for %d OUT"), conn->fd);
         ret = drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL);
         if (connection_practically_dead(ret)) {
             log_warn("io", L("Send failed, connection is being dropped for sock: %d"), conn->fd); 
             destroy_sock(conn);
+            alive = 0;
         }
     }
     if (event & EPOLLIN) {
@@ -1172,11 +1185,18 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
         if (connection_practically_dead(ret)) {
             log_warn("io", L("Recv failed, connection id being dropped for sock: %d"), conn->fd);
             destroy_sock(conn);
+            alive = 0;
         }
     }
     if (event & (EPOLLRDHUP | EPOLLHUP)) {
         log_warn("io", L("Connection closed, connection id being dropped for sock: %d"), conn->fd);
         destroy_sock(conn);
+        alive = 0;
+    }
+    if (alive && (conn->ctx->low_lat_mode >= DISABLE_DELAYED_ACK)) {
+        if (setsockopt(conn->fd, IPPROTO_TCP, TCP_QUICKACK, (int[]){1}, sizeof(int)) != 0) {
+            log_warn("io", L("Failed to turn-off delayed ack for sock: %d"), conn->fd); 
+        }
     }
 }
 
@@ -1434,15 +1454,19 @@ static void fix_broken_connections(io_ctx_t *ctx) {
         LIST_REMOVE(prev_peer, link);
     }
     log_warn("io", L("Recconnect attempt summary: %d of %d passive-peers re-connected successfully"), success, total);
+    if ((ctx->tx_drop.p + ctx->tx_partial_compress_drop.p) > 0) {
+        log_warn("io", L("Drop stats: drop-pkt: %d, drop-bytes: %d, drop-partial-compress-pkt: %d"), ctx->tx_drop.p, ctx->tx_drop.b, ctx->tx_partial_compress_drop.p);
+        ctx->tx_drop.p = ctx->tx_drop.b = ctx->tx_partial_compress_drop.p = 0;
+    }
 }
 
 #define MAX_POLLED_EVENTS 256
 
-int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl, int compression_level) {
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl, int compression_level, int low_latency_aggressiveness) {
     int ret = -1;
     io_ctx_t *ctx;
     time_t last_reconnect_at = time(NULL);
-    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name, compression_level)) != NULL) {
+    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name, compression_level, low_latency_aggressiveness)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
             int num_evts;

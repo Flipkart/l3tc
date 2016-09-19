@@ -54,6 +54,7 @@ static void usage(void) {
     fprintf(stderr, " -s, --setName  <ipset>                           ipset set-name to be used to record peers for selectively compressing flows\n");
     fprintf(stderr, " -u, --upScript <route-up cmd>                    command for setting-up routing (run once tunnel is up)\n");
     fprintf(stderr, " -r, --tryReconnectInterval <seconds>             least number of seconds to wait before re-attempting connect with failed peers\n");
+    fprintf(stderr, " -L, --lowLatencyMode <level>                     aggressiveness of low-latency-mode (0: disable, 1: turn on TCP_NODELAY, 2: turn on TCP_QUICKACK)\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
 }
@@ -75,6 +76,7 @@ int main(int argc, char *argv[]) {
     char *ipset_name = NULL;
     char *route_up_cmd = NULL;
     int try_reconnect_itvl = 30;
+    int low_latency_aggressiveness = 0;
 
 	/* TODO:3001 If you want to add more options, add them here. */
 	static struct option long_options[] = {
@@ -89,10 +91,11 @@ int main(int argc, char *argv[]) {
                 { "setName", required_argument, 0, 's' },
                 { "upCmd", required_argument, 0, 'u' },
                 { "tryReconnectInterval", required_argument, 0, 'r' },
+                { "lowLatencyMode", required_argument, 0, 'L' },
                 { 0 }};
 	while (1) {
 		int option_index = 0;
-		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:",
+		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:L:",
 		    long_options, &option_index);
 		if (ch == -1) break;
 		switch (ch) {
@@ -139,6 +142,9 @@ int main(int argc, char *argv[]) {
         case 'r':
             try_reconnect_itvl = atoi(optarg);
             break;
+        case 'L':
+            low_latency_aggressiveness = atoi(optarg);
+            break;
 		default:
 			fprintf(stderr, "unknown option `%c'\n", ch);
 			usage();
@@ -177,7 +183,7 @@ int main(int argc, char *argv[]) {
 
     if (! error) {
         wireup_signals();
-        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name, try_reconnect_itvl, compression_level) != 0) error = "io loop failed";
+        if (io(tun_fd, peer_file, self_addr_v4, self_addr_v6, listener_port, ipset_name, try_reconnect_itvl, compression_level, low_latency_aggressiveness) != 0) error = "io loop failed";
     }
 
     free(self_addr_v4);
