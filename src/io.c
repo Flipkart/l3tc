@@ -31,9 +31,6 @@
 
 #define MAX_NW_ADDR_LEN ((IPv6_ADDR_LEN > IPv4_ADDR_LEN) ? IPv6_ADDR_LEN : IPv4_ADDR_LEN)
 
-#define TUN_RING_SZ 1024*1024 /* 1 MB, must be greater than 64kB for IPv4, need to check limits in IPv6 */
-#define CONN_RING_SZ 128*1024 /* 128 KB, can fit atleast 2 IPv4 packets */
-
 #define DISABLE_DELAYED_ACK 2
 #define DISABLE_NAGLE_ALGO 1
 
@@ -117,6 +114,8 @@ struct io_ctx_s {
     int low_lat_mode;
     io_ctr_t tx_drop, tx_partial_compress_drop;
     int compression_level;
+    int tun_ring_sz;
+    int conn_ring_sz;
 };
 
 static inline void destroy_sock(io_sock_t *sock);
@@ -315,7 +314,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
     DBG("io", L("initializing tun state"));
     assert(io_ctx != NULL);
     io_ctx_t *ctx = (io_ctx_t *) io_ctx;
-    if (init_backlog_ring(&sock->d.tun.tx, TUN_RING_SZ) != 0) {
+    if (init_backlog_ring(&sock->d.tun.tx, ctx->tun_ring_sz) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for tun"));
         return -1;
     }
@@ -340,7 +339,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
 
 static void free_passive_peer(void *_pp);
 
-static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name, int compression_level, int low_latency_aggressiveness) {
+static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *self_addr_v6, const char *ipset_name, int compression_level, int low_latency_aggressiveness, ring_sz_t *ring_sz) {
     int epoll_fd;
     
 #	if defined(EPOLL_CLOEXEC) && defined(HAVE_EPOLL_CREATE1)
@@ -371,6 +370,8 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
     ctx->tun_fd = tun_fd;
     ctx->ipset_name = ipset_name;
     ctx->low_lat_mode = low_latency_aggressiveness;
+    ctx->tun_ring_sz = ring_sz->tun;
+    ctx->conn_ring_sz = ring_sz->conn;
     LIST_INIT(&ctx->disconnected_passive_peers);
     LIST_INIT(&ctx->non_conns);
     if (self_addr_v4 != NULL) {
@@ -509,11 +510,11 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     io_ctx_t *ctx = sock->ctx;
     memcpy(sock->d.conn.peer, addr_info->addr, MAX_NW_ADDR_LEN);
     sock->d.conn.af = addr_info->af;
-    if (init_backlog_ring(&sock->d.conn.tx, CONN_RING_SZ) != 0) {
+    if (init_backlog_ring(&sock->d.conn.tx, ctx->conn_ring_sz) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
-    if (init_backlog_ring(&sock->d.conn.rx, CONN_RING_SZ) != 0) {
+    if (init_backlog_ring(&sock->d.conn.rx, ctx->conn_ring_sz) != 0) {
         log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
@@ -1211,6 +1212,7 @@ static inline int expand_tun_wbuff_if_necessary(tun_pkt_buff_t *wbuff, ssize_t a
             log_crit("io", L("failed to expand tun-write pkt-buff, was trying allocation sz: %zd"), new_cap);
             return -1;
         }
+        log_warn("io", L("expanded tun wbuff from %zd to %zd"), wbuff->capacity, new_cap);
         wbuff->buff = expanded_buff;
         wbuff->capacity = new_cap;
     }
@@ -1462,11 +1464,11 @@ static void fix_broken_connections(io_ctx_t *ctx) {
 
 #define MAX_POLLED_EVENTS 256
 
-int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl, int compression_level, int low_latency_aggressiveness) {
+int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl, int compression_level, int low_latency_aggressiveness, ring_sz_t *ring_sz) {
     int ret = -1;
     io_ctx_t *ctx;
     time_t last_reconnect_at = time(NULL);
-    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name, compression_level, low_latency_aggressiveness)) != NULL) {
+    if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name, compression_level, low_latency_aggressiveness, ring_sz)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
             int num_evts;
