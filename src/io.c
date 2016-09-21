@@ -4,7 +4,6 @@
 #include "log.h"
 #include "compress.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -41,8 +40,9 @@ typedef struct ring_buff_s ring_buff_t;
 
 struct ring_buff_s {
     void *buff;
-    ssize_t sz, start, end;
+    ssize_t sz, start, end, max;
     int wraped;
+	int resizable;
 };
 
 struct tun_pkt_buff_s {
@@ -114,8 +114,10 @@ struct io_ctx_s {
     int low_lat_mode;
     io_ctr_t tx_drop, tx_partial_compress_drop;
     int compression_level;
-    int tun_ring_sz;
-    int conn_ring_sz;
+    ssize_t tun_ring_sz;
+    ssize_t conn_ring_sz;
+	ssize_t max_allowed_ring_sz;
+	int resize_rings;
 };
 
 static inline void destroy_sock(io_sock_t *sock);
@@ -296,15 +298,59 @@ static inline int add_sock(io_ctx_t *ctx, int fd, int typ, type_specific_initial
     return 0;
 }
 
-static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz) {
+static inline int init_backlog_ring(ring_buff_t *rbuff, size_t sz, int resizable, size_t max_allowed_sz) {
     if (NULL == (rbuff->buff = malloc(sz))) {
         return -1;
     }
     rbuff->sz = sz;
     rbuff->start = rbuff->end = 0;
     rbuff->wraped = 0;
-    DBG("io", L("backlog ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d } initialized"), rbuff, rbuff->sz, rbuff->start, rbuff->end, rbuff->wraped);
+	rbuff->resizable = resizable;
+	rbuff->max = max_allowed_sz;
+    DBG("io", L("backlog ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d, resizable=%d, max_sz=%zd } initialized"), rbuff, rbuff->sz, rbuff->start, rbuff->end, rbuff->wraped, rbuff->resizable, rbuff->max);
     return 0;
+}
+
+#define EXPANSION_FACTOR 2
+
+static inline int expand_ring_buffer(ring_buff_t *rbuff) {
+	assert(rbuff->resizable);
+	
+	ssize_t new_sz = rbuff->sz * EXPANSION_FACTOR;
+	if (new_sz > rbuff->max) {
+		new_sz = rbuff->max;
+	}
+	assert(rbuff->sz != new_sz);
+
+	log_warn("io", L("expanding backlog ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d, resizable=%d, max_sz=%zd } to %zd bytes"), rbuff, rbuff->sz, rbuff->start, rbuff->end, rbuff->wraped, rbuff->resizable, rbuff->max, new_sz);
+	
+	void *buff = malloc(new_sz);
+	if (buff == NULL) {
+		log_crit("io", L("allocation for backlog ring expansion failed for: %p"), rbuff);
+		return -1;
+	}
+	
+	ssize_t copied_sz;
+	if (rbuff->wraped) {
+		memcpy(buff, rbuff->buff + rbuff->start, rbuff->sz - rbuff->start);
+		memcpy(buff + rbuff->sz - rbuff->start, rbuff->buff, rbuff->end);
+		copied_sz = rbuff->sz - rbuff->start + rbuff->end;
+	} else {
+		memcpy(buff, rbuff->buff + rbuff->start, rbuff->end - rbuff->start);
+		copied_sz = rbuff->end - rbuff->start;
+	}
+	free(rbuff->buff);
+	
+	rbuff->buff = buff;
+	rbuff->sz = new_sz;
+	rbuff->start = 0;
+	rbuff->end = copied_sz;
+	rbuff->wraped = 0;
+	rbuff->resizable = ((new_sz * EXPANSION_FACTOR) <= rbuff->max);
+
+	log_info("io", L("expanded backlog ring: %p { sz=%zd, start=%zd, end=%zd, wrapped=%d, resizable=%d, max_sz=%zd }"), rbuff, rbuff->sz, rbuff->start, rbuff->end, rbuff->wraped, rbuff->resizable, rbuff->max);
+
+	return 0;
 }
 
 #define INITIAL_TUN_PKT_BUFF_SZ 4096
@@ -314,7 +360,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
     DBG("io", L("initializing tun state"));
     assert(io_ctx != NULL);
     io_ctx_t *ctx = (io_ctx_t *) io_ctx;
-    if (init_backlog_ring(&sock->d.tun.tx, ctx->tun_ring_sz) != 0) {
+    if (init_backlog_ring(&sock->d.tun.tx, ctx->tun_ring_sz, ctx->resize_rings, ctx->max_allowed_ring_sz) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for tun"));
         return -1;
     }
@@ -372,6 +418,8 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
     ctx->low_lat_mode = low_latency_aggressiveness;
     ctx->tun_ring_sz = ring_sz->tun;
     ctx->conn_ring_sz = ring_sz->conn;
+	ctx->max_allowed_ring_sz = ring_sz->max_allowed;
+	ctx->resize_rings = ring_sz->do_resize;
     LIST_INIT(&ctx->disconnected_passive_peers);
     LIST_INIT(&ctx->non_conns);
     if (self_addr_v4 != NULL) {
@@ -510,11 +558,11 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     io_ctx_t *ctx = sock->ctx;
     memcpy(sock->d.conn.peer, addr_info->addr, MAX_NW_ADDR_LEN);
     sock->d.conn.af = addr_info->af;
-    if (init_backlog_ring(&sock->d.conn.tx, ctx->conn_ring_sz) != 0) {
+    if (init_backlog_ring(&sock->d.conn.tx, ctx->conn_ring_sz, ctx->resize_rings, ctx->max_allowed_ring_sz) != 0) {
         log_crit("io", L("couldn't allocate tx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
-    if (init_backlog_ring(&sock->d.conn.rx, ctx->conn_ring_sz) != 0) {
+    if (init_backlog_ring(&sock->d.conn.rx, ctx->conn_ring_sz, ctx->resize_rings, ctx->max_allowed_ring_sz) != 0) {
         log_crit("io", L("couldn't allocate rx-backlog ring for sock: %d"), sock->fd);
         return -1;
     }
@@ -922,6 +970,13 @@ static inline int fill_ring(int fd, ring_buff_t *r, io_handler_fn_t *io_hdlr, da
             ret = io_hdlr(fd, r->buff + r->end, r->sz - r->end, &r->end, hdlr_ctx, r->start);
             DBG("io", L("after io-hdlr call(ret: %d) "BUFF_STATE_FORAMT_STR), ret, BUFF_STATE_VARS(r));
         }
+		if ((ret == CONN_IO_OK_NOT_ENOUGH_SPACE) && r->resizable) {
+			DBG("io", L("attempting ring-buffer expansion "BUFF_STATE_FORAMT_STR), BUFF_STATE_VARS(r));
+			if (expand_ring_buffer(r) == 0)	{
+				ret = CONN_IO_OK;
+				continue;
+			}
+		}
         /* try to push data, fakers like write-to-tun don't provide this, hence nullable */
         if (data_pusher != NULL) {
             if (r->wraped) {

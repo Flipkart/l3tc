@@ -4,10 +4,14 @@
 #if HAVE_CONFIG_H
 #  include <config.h>
 #endif
+#include <unistd.h>
+
 
 struct ring_sz_s {
-    int tun;
-    int conn;
+    ssize_t tun;
+    ssize_t conn;
+	ssize_t max_allowed;
+	int do_resize;
 };
 
 typedef struct ring_sz_s ring_sz_t;

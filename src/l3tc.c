@@ -38,6 +38,7 @@ extern const char *__progname;
 
 #define TUN_RING_SZ 1024*1024 /* 1 MB, must be greater than 64kB for IPv4, need to check limits in IPv6 */
 #define CONN_RING_SZ 128*1024 /* 128 KB, can fit atleast 2 IPv4 packets */
+#define MAX_RING_SZ 16*1024*1024 /* 16 MB */
 
 static void usage(void) {
 	/* TODO:3002 Don't forget to update the usage block with the most
@@ -60,6 +61,8 @@ static void usage(void) {
     fprintf(stderr, " -L, --lowLatencyMode <level>                     aggressiveness of low-latency-mode (0: disable, 1: turn on TCP_NODELAY, 2: turn on TCP_QUICKACK)\n");
     fprintf(stderr, " -e, --externalRingSz <sz>                        size for ring-buffers behind connections (bytes) \n");
     fprintf(stderr, " -t, --tunRingSz <sz>                             size for ring-buffers behind tunnel (bytes) \n");
+	fprintf(stderr, " -a, --adaptiveRingSz                             enable adaptive-sizing for ring-buffers (expand as needed) \n");
+	fprintf(stderr, " -M, --maxRingSz <sz>                             maximum allowed size of a ring (bytes) \n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
 }
@@ -82,7 +85,7 @@ int main(int argc, char *argv[]) {
     char *route_up_cmd = NULL;
     int try_reconnect_itvl = 30;
     int low_latency_aggressiveness = 0;
-    ring_sz_t ring_sz = {TUN_RING_SZ, CONN_RING_SZ};
+    ring_sz_t ring_sz = {TUN_RING_SZ, CONN_RING_SZ, MAX_RING_SZ, 0};
 
 	/* TODO:3001 If you want to add more options, add them here. */
 	static struct option long_options[] = {
@@ -100,10 +103,12 @@ int main(int argc, char *argv[]) {
                 { "lowLatencyMode", required_argument, 0, 'L' },
                 { "externalRingSz", required_argument, 0, 'e' },
                 { "tunRingSz", required_argument, 0, 't' },
+				{ "maxRingSz", required_argument, 0, 'M' },
+				{ "adaptiveRingSz", no_argument, 0, 'a' },
                 { 0 }};
 	while (1) {
 		int option_index = 0;
-		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:L:e:t:",
+		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:L:e:t:aM:",
 		    long_options, &option_index);
 		if (ch == -1) break;
 		switch (ch) {
@@ -158,6 +163,12 @@ int main(int argc, char *argv[]) {
             break;
         case 't':
             ring_sz.tun = atoi(optarg);
+            break;
+        case 'a':
+            ring_sz.do_resize = 1;
+            break;
+        case 'M':
+            ring_sz.max_allowed = atoi(optarg);
             break;
 		default:
 			fprintf(stderr, "unknown option `%c'\n", ch);
