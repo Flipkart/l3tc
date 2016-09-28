@@ -49,3 +49,5 @@ Makefile
 /test/test.tmp
 
 TAGS
+
+cscope.out

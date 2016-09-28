@@ -44,8 +44,11 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     ssize_t remaining_capacity = capacity;
     if (comp->deflate_surplus > 0) {
         data_copied_from_buffer = (comp->deflate_surplus > capacity) ? capacity : comp->deflate_surplus;
-        memcpy(to, comp->deflate_dest_buff, data_copied_from_buffer);
+        memcpy(to, comp->deflate_dest_buff + comp->deflate_surplus_offset, data_copied_from_buffer);
         comp->deflate_surplus -= data_copied_from_buffer;
+        if (comp->deflate_surplus > 0) {
+            comp->deflate_surplus_offset += data_copied_from_buffer;
+        }
         remaining_capacity -= data_copied_from_buffer;
         DBG(C_LOG, L("compress(%p) copied %zd compressed surplus (remaining surplus: %u, remaining dest capacity: %zd) bytes over to buff %p"), comp, data_copied_from_buffer, comp->deflate_surplus, remaining_capacity, to);
     }
@@ -57,37 +60,43 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         return data_copied_from_buffer;
     }
     assertf(comp->deflate_surplus == 0, C_LOG, L("deflate surplus was: %u"), comp->deflate_surplus);
+    comp->deflate_surplus_offset = 0;
     z_stream *zstrm = &comp->deflate;
     assert(zstrm != NULL);
     zstrm->avail_out = remaining_capacity;
     zstrm->next_out = to + data_copied_from_buffer;
     ssize_t available_at_start = zstrm->avail_in;
-    int ret;
-    do {
-        ret = deflate(zstrm, Z_SYNC_FLUSH);
-        assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
-    } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
-
-    ssize_t remaining_capacity_after_compression = zstrm->avail_out;
-    ssize_t surplus_input;
-    if (DEBUG_LOG_ENABLED) surplus_input = zstrm->avail_in;
-
-    if (0 == remaining_capacity_after_compression) {
-        zstrm->avail_out = COMPRESSED_SURPLUS_CONTENT_CAPACITY;
-        zstrm->next_out = comp->deflate_dest_buff;
+    ssize_t bytes_directly_written;
+    if (available_at_start > 0) {
+        int ret;
         do {
-            ret = deflate(zstrm, Z_NO_FLUSH);
+            ret = deflate(zstrm, Z_SYNC_FLUSH);
             assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
         } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
-        comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
+
+        ssize_t remaining_capacity_after_compression = zstrm->avail_out;
+        ssize_t surplus_input;
+        if (DEBUG_LOG_ENABLED) surplus_input = zstrm->avail_in;
+
+        if (0 == remaining_capacity_after_compression) {
+            zstrm->avail_out = COMPRESSED_SURPLUS_CONTENT_CAPACITY;
+            zstrm->next_out = comp->deflate_dest_buff;
+            do {
+                ret = deflate(zstrm, Z_NO_FLUSH);
+                assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
+            } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
+            comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
+        }
+
+        bytes_directly_written = capacity - remaining_capacity_after_compression;
+
+        DBG(C_LOG, L("compress(%p) %zd bytes (handled directly: %zd, handled towards surplus buff: %zd, unhandled: %u) => %zd bytes (actual dest: %zd bytes (remaining capacity: %zd), surplus buff: %u bytes (remaining capacity: %u))"),
+            comp,
+            available_at_start - zstrm->avail_in, available_at_start - surplus_input, surplus_input - zstrm->avail_in, zstrm->avail_in,
+            bytes_directly_written + comp->deflate_surplus, bytes_directly_written, remaining_capacity_after_compression, comp->deflate_surplus, COMPRESSED_SURPLUS_CONTENT_CAPACITY - comp->deflate_surplus);
+    } else {
+        bytes_directly_written = capacity - remaining_capacity;
     }
-
-    ssize_t bytes_directly_written = capacity - remaining_capacity_after_compression;
-
-    DBG(C_LOG, L("compress(%p) %zd bytes (handled directly: %zd, handled towards surplus buff: %zd, unhandled: %u) => %zd bytes (actual dest: %zd bytes (remaining capacity: %zd), surplus buff: %u bytes (remaining capacity: %u))"),
-        comp,
-        available_at_start - zstrm->avail_in, available_at_start - surplus_input, surplus_input - zstrm->avail_in, zstrm->avail_in,
-        bytes_directly_written + comp->deflate_surplus, bytes_directly_written, remaining_capacity_after_compression, comp->deflate_surplus, COMPRESSED_SURPLUS_CONTENT_CAPACITY - comp->deflate_surplus);
 
     *complete = (zstrm->avail_in == 0);
 
