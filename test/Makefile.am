@@ -26,10 +26,12 @@ TESTS = $(check_PROGRAMS)
 
 if WITH_VALGRIND
 TESTS += str_htab_test-vg.sh \
-	byte_array_htab_test-vg.sh
+	byte_array_htab_test-vg.sh \
+	compress_test-vg.sh
 endif
 
 EXTRA_DIST = \
 	str_htab_test-vg.sh \
 	byte_array_htab_test-vg.sh \
-	nocompress_integration_test.sh
+	nocompress_integration_test.sh \
+	compress_test-vg.sh

@@ -70,7 +70,7 @@ void do_test(int buff_sz, int buff_dest_sz) {
         written = do_compress(&comp, buff_dest, buff_dest_sz, &consumed, &complete);
         total_consumed += consumed;
         size_t actual_write = fwrite(buff_dest, 1, written, comp_dest);
-        log_crit(C_LOG, L("Remaining in compression buff: %d (consumed: %zd, written: %zd, avail_out: %d, avail_in: %d)\n"), comp.deflate.avail_in, consumed, written, comp.deflate.avail_out, comp.deflate.avail_in);
+        log_info(C_LOG, L("Remaining in compression buff: %d (consumed: %zd, written: %zd, avail_out: %d, avail_in: %d)\n"), comp.deflate.avail_in, consumed, written, comp.deflate.avail_out, comp.deflate.avail_in);
 
         assertf(actual_write == written, C_LOG, L("written: %zd"), written);
     }
@@ -82,7 +82,7 @@ void do_test(int buff_sz, int buff_dest_sz) {
         if (comp.inflatable_bytes == 0) {
             ssize_t read_buff_sz = sizeof(comp.inflate_src_buff) > buff_sz ? buff_sz : sizeof(comp.inflate_src_buff);
             bytes_read = fread(buff, 1, read_buff_sz, comp_dest);
-            log_crit(C_LOG, L("read bytes: %zd (remaining compressed: %d)\n"), bytes_read, comp.inflatable_bytes);
+            log_info(C_LOG, L("read bytes: %zd (remaining compressed: %d)\n"), bytes_read, comp.inflatable_bytes);
             if (bytes_read == 0) {
                 has_more_data = 0;
                 continue;
@@ -90,12 +90,12 @@ void do_test(int buff_sz, int buff_dest_sz) {
                 memcpy(comp.inflate_src_buff, buff, bytes_read);
                 comp.inflatable_bytes = bytes_read;
                 comp.inflatable_bytes_offset = 0;
-                log_crit(C_LOG, L("Adding inflatable bytes: %d\n"), comp.inflatable_bytes);
+                log_info(C_LOG, L("Adding inflatable bytes: %d\n"), comp.inflatable_bytes);
             }
         }
         written = do_decompress(&comp, buff_dest, buff_dest_sz);
         assertf(written <= buff_dest_sz, C_LOG, L("wrote more than buffer, wrote: %zd, buff_sz; %d"), written, buff_dest_sz);
-        log_crit(C_LOG, L("decomprssed(written) bytes: %zd (remaining compressed: %d, avail_in: %d)\n"), written, comp.inflatable_bytes, comp.inflate.avail_in);
+        log_info(C_LOG, L("decomprssed(written) bytes: %zd (remaining compressed: %d, avail_in: %d)\n"), written, comp.inflatable_bytes, comp.inflate.avail_in);
         assert(fwrite(buff_dest, 1, written, decomp_dest) == written);
     }
 
@@ -107,7 +107,7 @@ void do_test(int buff_sz, int buff_dest_sz) {
 }
 
 int main() {
-    log_init(3, "test");
+    log_init(1, "test");
     
     do_test(EMBARASSINGLY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
     do_test(VERY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
