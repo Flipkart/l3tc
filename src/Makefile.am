@@ -5,7 +5,11 @@ AM_LDFLAGS = $(MORE_LDFLAGS)
 bin_PROGRAMS = l3tc
 dist_man_MANS = l3tc.8
 
-noinst_LTLIBRARIES = libstr_htab.la libba_htab.la liblogging.la libcommon.la libcompress.la
+noinst_LTLIBRARIES = libstr_htab.la libba_htab.la liblogging.la libcommon.la libcompress.la libdebug.la
+
+libdebug_la_SOURCES  = debug.h debug.c
+libdebug_la_CPPFLAGS = $(AM_CFLAGS)
+libdebug_la_LIBADD =  $(AM_LDFLAGS)
 
 liblogging_la_SOURCES  = log.h log.c
 liblogging_la_CPPFLAGS = $(AM_CFLAGS)
@@ -32,7 +36,7 @@ libcompress_la_LIBADD =  $(AM_LDFLAGS)
 ## TODO:5000 Automake will find dependencies by itself. Run
 ## TODO:5000 ./autogen.sh after modifying this file.
 
-l3tc_SOURCES  = log.h str_htab.h common.h compress.h tun.c tun.h io.c io.h l3tc.h l3tc.c
+l3tc_SOURCES  = log.h str_htab.h common.h compress.h tun.c tun.h io.c io.h l3tc.h l3tc.c debug.h debug.c
 l3tc_CFLAGS   = $(AM_CFLAGS) @ZLIB_CFLAGS@
 l3tc_LDFLAGS  = $(AM_LDFLAGS) @ZLIB_LIBS@
 l3tc_LDADD    = liblogging.la libcommon.la libba_htab.la libcompress.la

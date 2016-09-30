@@ -3,6 +3,8 @@
 
 #include <assert.h>
 #include <string.h>
+#include "debug.h"
+#include <stdio.h>
 
 #define C_LOG "compression"
 
@@ -38,6 +40,16 @@ ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
     return decompressed_out;
 }
 
+#ifdef DEBUG
+#define DBG_BUFF_SZ 50000
+char dbgbuf[DBG_BUFF_SZ];
+#define DBG_PEEK(buff, offset, len, msg)                                \
+    if (DEBUG_LOG_ENABLED) {                                            \
+        print_byte_array(buff + offset, len, dbgbuf, DBG_BUFF_SZ);      \
+        DBG(C_LOG, L("%s TRACE %zd bytes starting in: %s"), msg, len, dbgbuf); \
+    }
+#endif
+
 ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consumed, int *complete) {
     assert(comp != NULL);
     ssize_t data_copied_from_buffer = 0;
@@ -45,6 +57,9 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     if (comp->deflate_surplus > 0) {
         data_copied_from_buffer = (comp->deflate_surplus > capacity) ? capacity : comp->deflate_surplus;
         memcpy(to, comp->deflate_dest_buff + comp->deflate_surplus_offset, data_copied_from_buffer);
+#ifdef DEBUG
+        DBG_PEEK(to, 0, data_copied_from_buffer, "Compress surplus-drain");
+#endif
         comp->deflate_surplus -= data_copied_from_buffer;
         if (comp->deflate_surplus > 0) {
             comp->deflate_surplus_offset += data_copied_from_buffer;
@@ -56,7 +71,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     if (0 == remaining_capacity) {
         *complete = 0;
         *consumed = 0;
-        DBG(C_LOG, L("compress(%p) ran out of space to write to, still has surplus: %u"), comp, comp->deflate_surplus);
+        DBG(C_LOG, L("compress(%p) ran out of space to write to, still has surplus: %u at offset %u"), comp, comp->deflate_surplus, comp->deflate_surplus_offset);
         return data_copied_from_buffer;
     }
     assertf(comp->deflate_surplus == 0, C_LOG, L("deflate surplus was: %u"), comp->deflate_surplus);
@@ -67,7 +82,7 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
     zstrm->next_out = to + data_copied_from_buffer;
     ssize_t available_at_start = zstrm->avail_in;
     ssize_t bytes_directly_written;
-    if (available_at_start > 0) {
+    if (available_at_start > 0 || ! comp->deflate_fully_flushed) {
         int ret;
         do {
             ret = deflate(zstrm, Z_SYNC_FLUSH);
@@ -77,15 +92,23 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
         ssize_t remaining_capacity_after_compression = zstrm->avail_out;
         ssize_t surplus_input;
         if (DEBUG_LOG_ENABLED) surplus_input = zstrm->avail_in;
+#ifdef DEBUG
+        if (zstrm->avail_out != remaining_capacity) {
+            DBG_PEEK(to + data_copied_from_buffer, 0, remaining_capacity - zstrm->avail_out, "Compress direct-write");
+        }
+#endif
 
         if (0 == remaining_capacity_after_compression) {
             zstrm->avail_out = COMPRESSED_SURPLUS_CONTENT_CAPACITY;
             zstrm->next_out = comp->deflate_dest_buff;
             do {
-                ret = deflate(zstrm, Z_NO_FLUSH);
+                ret = deflate(zstrm, Z_SYNC_FLUSH);
                 assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
             } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
             comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
+            comp->deflate_fully_flushed = (zstrm->avail_out > 0);
+        } else {
+            comp->deflate_fully_flushed = 1;
         }
 
         bytes_directly_written = capacity - remaining_capacity_after_compression;
@@ -128,6 +151,7 @@ int init_compression_ctx(compress_t *comp, int compression_level) {
         log_crit(C_LOG, L("deflate-stream initialization failed(err: %d): %s"), ret, comp->deflate.msg);
         return -1;
     }
+    comp->deflate_fully_flushed = 0;
     ret = inflateInit(&comp->inflate);
     if (ret < Z_OK) {
         log_crit(C_LOG, L("inflate-stream initialization failed(err: %d): %s"), ret, comp->inflate.msg);

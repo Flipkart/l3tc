@@ -14,6 +14,7 @@ struct compress_s {
     uint8_t deflate_dest_buff[COMPRESSED_SURPLUS_CONTENT_CAPACITY];
     uint32_t deflate_surplus;
     uint32_t deflate_surplus_offset;
+    int deflate_fully_flushed;
 
     z_stream inflate;
     uint8_t inflate_src_buff[DECOMPRESSION_SRC_BUFF_CAPACITY];
