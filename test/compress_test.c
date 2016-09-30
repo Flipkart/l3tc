@@ -51,6 +51,7 @@ void do_test(int buff_sz, int buff_dest_sz) {
 
     clock_t compress_time, decompress_time;
     clock_t start;
+    compress_time = decompress_time = 0;
 
     assert(init_compression_ctx(&comp, DEFAULT_COMPRESSION_LEVEL) == 0);
 
@@ -77,7 +78,6 @@ void do_test(int buff_sz, int buff_dest_sz) {
 
         total_consumed += consumed;
         size_t actual_write = fwrite(buff_dest, 1, written, comp_dest);
-        log_info(C_LOG, L("Remaining in compression buff: %d (consumed: %zd, written: %zd, avail_out: %d, avail_in: %d)\n"), comp.deflate.avail_in, consumed, written, comp.deflate.avail_out, comp.deflate.avail_in);
 
         assertf(actual_write == written, C_LOG, L("written: %zd"), written);
     }
@@ -104,7 +104,6 @@ void do_test(int buff_sz, int buff_dest_sz) {
         written = do_decompress(&comp, buff_dest, buff_dest_sz);
         decompress_time += (clock() - start);
         assertf(written <= buff_dest_sz, C_LOG, L("wrote more than buffer, wrote: %zd, buff_sz; %d"), written, buff_dest_sz);
-        log_info(C_LOG, L("decomprssed(written) bytes: %zd (remaining compressed: %d, avail_in: %d)\n"), written, comp.inflatable_bytes, comp.inflate.avail_in);
         assert(fwrite(buff_dest, 1, written, decomp_dest) == written);
     }
 
@@ -118,8 +117,47 @@ void do_test(int buff_sz, int buff_dest_sz) {
     printf("TIME TAKEN (Buff sz: %d, %d) => compress: %lg, decompress: %lg\n", buff_sz, buff_dest_sz, (double) compress_time / CLOCKS_PER_SEC, (double) decompress_time / CLOCKS_PER_SEC);
 }
 
+void test_complete_and_consumed_behavior() {
+    compress_t comp;
+    memset(&comp, 0, sizeof(comp));
+    char comp_src[64], comp_dest[64], dcomp_dest[64];
+    size_t xlarge_buff_sz = 10 * LARGE_BUFF_SZ;
+    char *comp_src_xlarge = malloc(xlarge_buff_sz);
+    ssize_t consumed;
+    int complete;
+    memset(comp_src, 1, sizeof(comp_src));
+    for (size_t i = 0; i < xlarge_buff_sz; i++) {
+        comp_src_xlarge[i] = i;
+    }
+
+    assert(init_compression_ctx(&comp, DEFAULT_COMPRESSION_LEVEL) == 0);
+    setup_compress_input(&comp, comp_src, sizeof(comp_src));
+    ssize_t compressed_sz = do_compress(&comp, comp_dest, sizeof(comp_dest), &consumed, &complete);
+    assert(compressed_sz == 12);
+    assert(64 == consumed);
+    assert(1 == complete);
+    memcpy(comp.inflate_src_buff, comp_dest, compressed_sz);
+    comp.inflatable_bytes = compressed_sz;
+    comp.inflatable_bytes_offset = 0;
+    ssize_t decomp_sz = do_decompress(&comp, dcomp_dest, sizeof(dcomp_dest));
+    assert(decomp_sz == 64);
+    destroy_compression_ctx(&comp);
+
+
+    assert(init_compression_ctx(&comp, DEFAULT_COMPRESSION_LEVEL) == 0);
+    setup_compress_input(&comp, comp_src_xlarge, xlarge_buff_sz);
+    compressed_sz = do_compress(&comp, comp_dest, 11, &consumed, &complete);
+    assert(compressed_sz == 11);
+    assert(4161536 == consumed);
+    assert(0 == complete);
+    destroy_compression_ctx(&comp);
+    free(comp_src_xlarge);
+}
+
 int main() {
     log_init(1, "test");
+
+    test_complete_and_consumed_behavior();
     
     do_test(EMBARASSINGLY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
     do_test(VERY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
