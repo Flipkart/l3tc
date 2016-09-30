@@ -63,7 +63,35 @@ esac
 
 AC_CACHE_SAVE
 
-PKG_CHECK_MODULES([ZLIB], [zlib])
+# zstd or zlib
+AC_ARG_ENABLE(zstd,
+        [AS_HELP_STRING([--enable-zstd],[Use zstd (new compression lib by facebook) insteed of default (zlib) @<:@default=no@:>@])],
+        [case "${enableval}" in
+         yes) enable_zstd="yes" ;;
+          no) enable_zstd="no" ;;
+           *) AC_MSG_ERROR(bad value ${enableval} for --enable-zstd) ;;
+         esac],
+        [enable_zstd="no"]
+)
+PKG_CHECK_MODULES([ZLIB], [zlib], [
+  has_zlib='yes'
+], [AC_MSG_NOTICE([Didn't find zLib!])])
+PKG_CHECK_MODULES([ZSTD], [zstd], [
+  has_zstd='yes'
+], [AC_MSG_NOTICE([Didn't find ZStd!])])
+AS_IF(
+[test "x$enable_zstd" = "xyes" && test "x$has_zstd" == "xyes"], [
+    AC_MSG_NOTICE([ZStandard chosen as prefered compression impl])
+    USE_ZSTD="yes"
+],
+[test "x$has_zlib" == "xyes"], [
+    AC_MSG_NOTICE([zLib chosen as prefered compression impl])
+    USE_ZLIB="yes"
+],
+[AC_MSG_FAILURE([Compression impl is missing])])
+AM_CONDITIONAL(USE_ZSTD, test "x$USE_ZSTD" = "xyes")
+AM_CONDITIONAL(USE_ZLIB, test "x$USE_ZLIB" = "xyes")
+
 AC_CHECK_HEADERS([stdint.h errno.h time.h sys/types.h sys/socket.h netdb.h sys/epoll.h sys/queue.h uthash.h assert.h sys/uio.h netinet/in.h netinet/ip.h unistd.h fcntl.h arpa/inet.h])
 
 AC_ARG_ENABLE(valgrind,
@@ -96,9 +124,9 @@ cat <<EOF
 
 ------------------ Summary ------------------
  $PACKAGE_NAME version $PACKAGE_VERSION
-  Prefix.........: $prefix
-  C Compiler.....: $CC $MORE_CFLAGS $MORE_CPPFLAGS $CFLAGS $CPPFLAGS
-  Linker.........: $LD $MORE_LDFLAGS $LDFLAGS $LIBS
+  Prefix..............: $prefix
+  C Compiler..........: $CC $MORE_CFLAGS $MORE_CPPFLAGS $CFLAGS $CPPFLAGS
+  Linker..............: $LD $MORE_LDFLAGS $LDFLAGS $LIBS
 ---------------------------------------------
 
 Check the above options and compile with:

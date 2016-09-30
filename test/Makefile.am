@@ -13,8 +13,15 @@ protocol_version_test_CPPFLAGS = $(AM_CFLAGS)
 protocol_version_test_LDADD = $(AM_LDFLAGS) ../src/libcommon.la
 
 compress_test_SOURCES = compress_test.c
-compress_test_CPPFLAGS = $(AM_CFLAGS) @ZLIB_CFLAGS@
-compress_test_LDADD = $(AM_LDFLAGS) ../src/libcompress.la ../src/libdebug.la ../src/liblogging.la @ZLIB_LIBS@
+compress_test_CPPFLAGS = $(AM_CFLAGS)
+compress_test_LDADD = $(AM_LDFLAGS) ../src/libcompress.la ../src/libdebug.la ../src/liblogging.la
+if USE_ZSTD
+compress_test_CPPFLAGS += @ZSTD_CFLAGS@
+compress_test_LDADD += @ZSTD_LIBS@
+else
+compress_test_CPPFLAGS += @ZLIB_CFLAGS@
+compress_test_LDADD += @ZLIB_LIBS@
+endif
 
 debug_test_SOURCES = debug_test.c
 debug_test_CPPFLAGS = $(AM_CFLAGS) @ZLIB_CFLAGS@

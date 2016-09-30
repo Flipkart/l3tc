@@ -27,7 +27,12 @@ libcommon_la_SOURCES  = common.h common.c
 libcommon_la_CPPFLAGS = $(AM_CFLAGS)
 libcommon_la_LIBADD =  $(AM_LDFLAGS)
 
-libcompress_la_SOURCES  = compress.h compress.c
+libcompress_la_SOURCES  = compress.h
+if USE_ZSTD
+libcompress_la_SOURCES  += zstd_compress.c
+else
+libcompress_la_SOURCES  += zlib_compress.c
+endif
 libcompress_la_CPPFLAGS = $(AM_CFLAGS)
 libcompress_la_LIBADD =  $(AM_LDFLAGS)
 
@@ -37,8 +42,17 @@ libcompress_la_LIBADD =  $(AM_LDFLAGS)
 ## TODO:5000 ./autogen.sh after modifying this file.
 
 l3tc_SOURCES  = log.h str_htab.h common.h compress.h tun.c tun.h io.c io.h l3tc.h l3tc.c debug.h debug.c
-l3tc_CFLAGS   = $(AM_CFLAGS) @ZLIB_CFLAGS@
-l3tc_LDFLAGS  = $(AM_LDFLAGS) @ZLIB_LIBS@
+
+l3tc_CFLAGS   = $(AM_CFLAGS)
+l3tc_LDFLAGS  = $(AM_LDFLAGS)
+if USE_ZSTD
+l3tc_CFLAGS += @ZSTD_CFLAGS@
+l3tc_LDFLAGS += @ZSTD_LIBS@
+else
+l3tc_CFLAGS += @ZLIB_CFLAGS@
+l3tc_LDFLAGS += @ZLIB_LIBS@
+endif
+
 l3tc_LDADD    = liblogging.la libcommon.la libba_htab.la libcompress.la
 
 ## TODO:2004 Each time you have used `PKG_CHECK_MODULES` macro
