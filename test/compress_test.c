@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
 
 #define ORIGINAL_PCAP_FILE "http.pcap.original"
 #define COMPRESSED_PCAP_FILE "http.pcap.compressed"
@@ -48,6 +49,9 @@ void do_test(int buff_sz, int buff_dest_sz) {
     FILE* decomp_dest = fopen(DECOMPRESSED_PCAP_FILE, "w+r");
     assert(decomp_dest != NULL);
 
+    clock_t compress_time, decompress_time;
+    clock_t start;
+
     assert(init_compression_ctx(&comp, DEFAULT_COMPRESSION_LEVEL) == 0);
 
     ssize_t total_consumed = -1;
@@ -67,7 +71,10 @@ void do_test(int buff_sz, int buff_dest_sz) {
                 setup_compress_input(&comp, buff, bytes_read);
             }
         }
+        start = clock();
         written = do_compress(&comp, buff_dest, buff_dest_sz, &consumed, &complete);
+        compress_time += (clock() - start);
+
         total_consumed += consumed;
         size_t actual_write = fwrite(buff_dest, 1, written, comp_dest);
         log_info(C_LOG, L("Remaining in compression buff: %d (consumed: %zd, written: %zd, avail_out: %d, avail_in: %d)\n"), comp.deflate.avail_in, consumed, written, comp.deflate.avail_out, comp.deflate.avail_in);
@@ -93,7 +100,9 @@ void do_test(int buff_sz, int buff_dest_sz) {
                 log_info(C_LOG, L("Adding inflatable bytes: %d\n"), comp.inflatable_bytes);
             }
         }
+        start = clock();
         written = do_decompress(&comp, buff_dest, buff_dest_sz);
+        decompress_time += (clock() - start);
         assertf(written <= buff_dest_sz, C_LOG, L("wrote more than buffer, wrote: %zd, buff_sz; %d"), written, buff_dest_sz);
         log_info(C_LOG, L("decomprssed(written) bytes: %zd (remaining compressed: %d, avail_in: %d)\n"), written, comp.inflatable_bytes, comp.inflate.avail_in);
         assert(fwrite(buff_dest, 1, written, decomp_dest) == written);
@@ -104,6 +113,8 @@ void do_test(int buff_sz, int buff_dest_sz) {
     assert(destroy_compression_ctx(&comp) == 0);
     free(buff);
     free(buff_dest);
+
+    printf("TIME TAKEN (Buff sz: %d, %d) => compress: %lg, decompress: %lg\n", buff_sz, buff_dest_sz, (double) compress_time / CLOCKS_PER_SEC, (double) decompress_time / CLOCKS_PER_SEC);
 }
 
 int main() {
