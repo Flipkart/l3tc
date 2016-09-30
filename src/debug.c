@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-void print_byte_array(char *src_buf, size_t src_len, char *dbgbuf, size_t dbgbuf_len) {
+void print_byte_array(void *src_buf, size_t src_len, char *dbgbuf, size_t dbgbuf_len) {
     assert(dbgbuf_len >= 16);
 
     size_t requires_skip = ((src_len * 3 + 2) > dbgbuf_len);
@@ -25,7 +25,7 @@ void print_byte_array(char *src_buf, size_t src_len, char *dbgbuf, size_t dbgbuf
                 continue;
             }
         }
-        int x = 0x000000FF & src_buf[i];
+        int x = 0x000000FF & ((char *) src_buf)[i];
         sprintf(dbgbuf + j, "%02x ", x);
     }
     

@@ -52,36 +52,12 @@ char dbgbuf[DBG_BUFF_SZ];
 
 ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consumed, int *complete) {
     assert(comp != NULL);
-    ssize_t data_copied_from_buffer = 0;
-    ssize_t remaining_capacity = capacity;
-    if (comp->deflate_surplus > 0) {
-        data_copied_from_buffer = (comp->deflate_surplus > capacity) ? capacity : comp->deflate_surplus;
-        memcpy(to, comp->deflate_dest_buff + comp->deflate_surplus_offset, data_copied_from_buffer);
-#ifdef DEBUG
-        DBG_PEEK(to, 0, data_copied_from_buffer, "Compress surplus-drain");
-#endif
-        comp->deflate_surplus -= data_copied_from_buffer;
-        if (comp->deflate_surplus > 0) {
-            comp->deflate_surplus_offset += data_copied_from_buffer;
-        }
-        remaining_capacity -= data_copied_from_buffer;
-        DBG(C_LOG, L("compress(%p) copied %zd compressed surplus (remaining surplus: %u, remaining dest capacity: %zd) bytes over to buff %p"), comp, data_copied_from_buffer, comp->deflate_surplus, remaining_capacity, to);
-    }
-    assertf(remaining_capacity >= 0, C_LOG, L("remaining capacity was: %zd"), remaining_capacity);
-    if (0 == remaining_capacity) {
-        *complete = 0;
-        *consumed = 0;
-        DBG(C_LOG, L("compress(%p) ran out of space to write to, still has surplus: %u at offset %u"), comp, comp->deflate_surplus, comp->deflate_surplus_offset);
-        return data_copied_from_buffer;
-    }
-    assertf(comp->deflate_surplus == 0, C_LOG, L("deflate surplus was: %u"), comp->deflate_surplus);
-    comp->deflate_surplus_offset = 0;
     z_stream *zstrm = &comp->deflate;
     assert(zstrm != NULL);
-    zstrm->avail_out = remaining_capacity;
-    zstrm->next_out = to + data_copied_from_buffer;
+    zstrm->avail_out = capacity;
+    zstrm->next_out = to;
     ssize_t available_at_start = zstrm->avail_in;
-    ssize_t bytes_directly_written;
+    ssize_t bytes_directly_written = 0;
     if (available_at_start > 0 || ! comp->deflate_fully_flushed) {
         int ret;
         do {
@@ -89,40 +65,12 @@ ssize_t do_compress(compress_t *comp, void *to, ssize_t capacity, ssize_t *consu
             assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
         } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
 
-        ssize_t remaining_capacity_after_compression = zstrm->avail_out;
-        ssize_t surplus_input;
-        if (DEBUG_LOG_ENABLED) surplus_input = zstrm->avail_in;
-#ifdef DEBUG
-        if (zstrm->avail_out != remaining_capacity) {
-            DBG_PEEK(to + data_copied_from_buffer, 0, remaining_capacity - zstrm->avail_out, "Compress direct-write");
-        }
-#endif
+        comp->deflate_fully_flushed = (zstrm->avail_out > 0);
 
-        if (0 == remaining_capacity_after_compression) {
-            zstrm->avail_out = COMPRESSED_SURPLUS_CONTENT_CAPACITY;
-            zstrm->next_out = comp->deflate_dest_buff;
-            do {
-                ret = deflate(zstrm, Z_SYNC_FLUSH);
-                assertf(ret >= Z_OK, C_LOG, L("deflate return: %d"), ret);
-            } while ((zstrm->avail_out != 0) && (zstrm->avail_in != 0));
-            comp->deflate_surplus = COMPRESSED_SURPLUS_CONTENT_CAPACITY - zstrm->avail_out;
-            comp->deflate_fully_flushed = (zstrm->avail_out > 0);
-        } else {
-            comp->deflate_fully_flushed = 1;
-        }
-
-        bytes_directly_written = capacity - remaining_capacity_after_compression;
-
-        DBG(C_LOG, L("compress(%p) %zd bytes (handled directly: %zd, handled towards surplus buff: %zd, unhandled: %u) => %zd bytes (actual dest: %zd bytes (remaining capacity: %zd), surplus buff: %u bytes (remaining capacity: %u))"),
-            comp,
-            available_at_start - zstrm->avail_in, available_at_start - surplus_input, surplus_input - zstrm->avail_in, zstrm->avail_in,
-            bytes_directly_written + comp->deflate_surplus, bytes_directly_written, remaining_capacity_after_compression, comp->deflate_surplus, COMPRESSED_SURPLUS_CONTENT_CAPACITY - comp->deflate_surplus);
-    } else {
-        bytes_directly_written = capacity - remaining_capacity;
+        bytes_directly_written = capacity - zstrm->avail_out;
     }
 
     *complete = (zstrm->avail_in == 0);
-
     *consumed = available_at_start - zstrm->avail_in;
 
     DBG(C_LOG, L("compress(%p) [complete: %d] overall %zd bytes => %zd bytes"), comp, *complete, *consumed, bytes_directly_written);
@@ -161,15 +109,29 @@ int init_compression_ctx(compress_t *comp, int compression_level) {
 }
 
 int destroy_compression_ctx(compress_t *comp) {
+    int failure = 0;
     assert(comp != NULL);
-    int ret = deflateEnd(&comp->deflate);
+    unsigned char buff[64];
+    char remaining_bytes_message[64];
+    comp->deflate.next_out = buff;
+    comp->deflate.avail_out = sizeof(buff);
+    int ret = deflate(&comp->deflate, Z_FINISH);
+    size_t diff_bytes = (sizeof(buff) - comp->deflate.avail_out);
+    if ((diff_bytes > 0) || (ret != Z_STREAM_END)) {
+        print_byte_array(buff, diff_bytes, remaining_bytes_message, sizeof(remaining_bytes_message));
+        log_crit(C_LOG, L("deflate-stream destroy found %s %zd un-flushed bytes(err: %d): %s {bytes: %s}"), comp->deflate.avail_out == 0 ? "atleast" : "exactly", diff_bytes,  ret, comp->deflate.msg, remaining_bytes_message);
+        failure = ret;
+    }
+    ret = deflateEnd(&comp->deflate);
     if (ret < Z_OK) {
         log_crit(C_LOG, L("deflate-stream destroy failed(err: %d): %s"), ret, comp->deflate.msg);
+        failure = ret;
     }
     ret = inflateEnd(&comp->inflate);
     if (ret < Z_OK) {
         log_crit(C_LOG, L("inflate-stream destroy failed(err: %d): %s"), ret, comp->inflate.msg);
+        failure = ret;
     }
-    return 0;
+    return failure;
 }
 
