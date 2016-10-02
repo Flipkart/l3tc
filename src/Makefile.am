@@ -27,15 +27,25 @@ libcommon_la_SOURCES  = common.h common.c
 libcommon_la_CPPFLAGS = $(AM_CFLAGS)
 libcommon_la_LIBADD =  $(AM_LDFLAGS)
 
+
+# compression START
 libcompress_la_SOURCES  = compress.h
+
 if USE_ZSTD
+compress_cflags = @ZSTD_CFLAGS@
+compress_ldflags = @ZSTD_LIBS@
 libcompress_la_SOURCES  += zstd_compress.c
-else
+endif
+
+if USE_ZLIB
+compress_cflags = @ZLIB_CFLAGS@
+compress_ldflags = @ZLIB_LIBS@
 libcompress_la_SOURCES  += zlib_compress.c
 endif
-libcompress_la_CPPFLAGS = $(AM_CFLAGS)
-libcompress_la_LIBADD =  $(AM_LDFLAGS)
 
+libcompress_la_CPPFLAGS = $(AM_CFLAGS) $(compress_cflags)
+libcompress_la_LIBADD =  $(AM_LDFLAGS) $(compress_ldflags)
+# compression END
 
 ## TODO:5000 When you want to add more files, add them below.
 ## TODO:5000 Automake will find dependencies by itself. Run
@@ -43,15 +53,8 @@ libcompress_la_LIBADD =  $(AM_LDFLAGS)
 
 l3tc_SOURCES  = log.h str_htab.h common.h compress.h tun.c tun.h io.c io.h l3tc.h l3tc.c debug.h debug.c
 
-l3tc_CFLAGS   = $(AM_CFLAGS)
-l3tc_LDFLAGS  = $(AM_LDFLAGS)
-if USE_ZSTD
-l3tc_CFLAGS += @ZSTD_CFLAGS@
-l3tc_LDFLAGS += @ZSTD_LIBS@
-else
-l3tc_CFLAGS += @ZLIB_CFLAGS@
-l3tc_LDFLAGS += @ZLIB_LIBS@
-endif
+l3tc_CFLAGS   = $(AM_CFLAGS)  $(compress_cflags)
+l3tc_LDFLAGS  = $(AM_LDFLAGS)  $(compress_ldflags)
 
 l3tc_LDADD    = liblogging.la libcommon.la libba_htab.la libcompress.la
 

@@ -76,17 +76,19 @@ AC_ARG_ENABLE(zstd,
 PKG_CHECK_MODULES([ZLIB], [zlib], [
   has_zlib='yes'
 ], [AC_MSG_NOTICE([Didn't find zLib!])])
-PKG_CHECK_MODULES([ZSTD], [zstd], [
+PKG_CHECK_MODULES([ZSTD], [libzstd], [
   has_zstd='yes'
 ], [AC_MSG_NOTICE([Didn't find ZStd!])])
 AS_IF(
 [test "x$enable_zstd" = "xyes" && test "x$has_zstd" == "xyes"], [
     AC_MSG_NOTICE([ZStandard chosen as prefered compression impl])
     USE_ZSTD="yes"
+    AC_DEFINE(USE_ZSTD, 1, [Use ZStandard])
 ],
 [test "x$has_zlib" == "xyes"], [
     AC_MSG_NOTICE([zLib chosen as prefered compression impl])
     USE_ZLIB="yes"
+    AC_DEFINE(USE_ZLIB, 1, [Use zLib])
 ],
 [AC_MSG_FAILURE([Compression impl is missing])])
 AM_CONDITIONAL(USE_ZSTD, test "x$USE_ZSTD" = "xyes")

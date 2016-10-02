@@ -12,20 +12,22 @@ protocol_version_test_SOURCES = protocol_version_test.c
 protocol_version_test_CPPFLAGS = $(AM_CFLAGS)
 protocol_version_test_LDADD = $(AM_LDFLAGS) ../src/libcommon.la
 
-compress_test_SOURCES = compress_test.c
-compress_test_CPPFLAGS = $(AM_CFLAGS)
-compress_test_LDADD = $(AM_LDFLAGS) ../src/libcompress.la ../src/libdebug.la ../src/liblogging.la
 if USE_ZSTD
-compress_test_CPPFLAGS += @ZSTD_CFLAGS@
-compress_test_LDADD += @ZSTD_LIBS@
-else
-compress_test_CPPFLAGS += @ZLIB_CFLAGS@
-compress_test_LDADD += @ZLIB_LIBS@
+compress_cflags = @ZSTD_CFLAGS@
+compress_ldflags = @ZSTD_LIBS@
+endif
+if USE_ZLIB
+compress_cflags = @ZLIB_CFLAGS@
+compress_ldflags = @ZLIB_LIBS@
 endif
 
+compress_test_SOURCES = compress_test.c
+compress_test_CPPFLAGS = $(AM_CFLAGS) $(compress_cflags)
+compress_test_LDADD = $(AM_LDFLAGS) ../src/libcompress.la ../src/libdebug.la ../src/liblogging.la $(compress_ldflags)
+
 debug_test_SOURCES = debug_test.c
-debug_test_CPPFLAGS = $(AM_CFLAGS) @ZLIB_CFLAGS@
-debug_test_LDADD = $(AM_LDFLAGS) ../src/libdebug.la @ZLIB_LIBS@
+debug_test_CPPFLAGS = $(AM_CFLAGS)
+debug_test_LDADD = $(AM_LDFLAGS) ../src/libdebug.la
 
 TESTS = $(check_PROGRAMS)
 # integration test that uses netns over veth connected to bridge is commented out because for some reason linux doesn't seem to take packets from tun (RX from tun seems broken, will debug someday and then enable this)

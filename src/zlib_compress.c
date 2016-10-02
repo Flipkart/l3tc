@@ -4,9 +4,8 @@
 #include <assert.h>
 #include <string.h>
 #include "debug.h"
-#include <stdio.h>
 
-#define C_LOG "compression"
+#define C_LOG "comp/zlib"
 
 ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
     assert(comp != NULL);
@@ -100,6 +99,7 @@ int init_compression_ctx(compress_t *comp, int compression_level) {
         return -1;
     }
     comp->deflate_fully_flushed = 0;
+    comp->inflate_src_buff_sz = DECOMPRESSION_SRC_BUFF_CAPACITY;
     ret = inflateInit(&comp->inflate);
     if (ret < Z_OK) {
         log_crit(C_LOG, L("inflate-stream initialization failed(err: %d): %s"), ret, comp->inflate.msg);
