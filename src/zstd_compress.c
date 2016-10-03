@@ -13,14 +13,20 @@ ssize_t do_decompress(compress_t *comp, void *to, ssize_t capacity) {
     ZSTD_DStream *dstream = comp->dstream;
     assert(dstream != NULL);
     ZSTD_outBuffer out = { to, capacity, 0 };
-    ZSTD_inBuffer in = { comp->inflate_src_buff, comp->inflatable_bytes, 0 };
+    uint32_t old_pos = comp->inflate_src_buff_offset;
+    ZSTD_inBuffer in = { comp->inflate_src_buff, comp->inflatable_bytes, old_pos };
     size_t decompress_status = 0;
     do {
+        DBG(C_LOG, L("BEFORE: buff states -> in: { src: %p, size: %zd, pos: %zd }, out: { dst: %p, size: %zd, pos: %zd }"),
+            in.src, in.size, in.pos, out.dst, out.size, out.pos);
         decompress_status = ZSTD_decompressStream(dstream, &out, &in);
+        DBG(C_LOG, L("AFTER: buff states -> in: { src: %p, size: %zd, pos: %zd }, out: { dst: %p, size: %zd, pos: %zd }"),
+            in.src, in.size, in.pos, out.dst, out.size, out.pos);
         assertf(! ZSTD_isError(decompress_status), C_LOG, L("decompress returned: %s"), ZSTD_getErrorName(decompress_status));
     } while ((in.pos < in.size) &&
              (out.pos < out.size));
-    comp->inflatable_bytes -= in.pos;
+    if (comp->inflatable_bytes == in.pos) comp->inflatable_bytes = 0;
+    comp->inflate_src_buff_offset = comp->inflatable_bytes ? in.pos : 0;
     DBG(C_LOG, L("decompress(%p) %zd bytes (unhandled: %zd) => %zd bytes (remaining capacity: %zd) (dest buff: %p (orig capacity: %zd))"), \
         comp, in.pos, in.size - in.pos, out.pos, out.size - out.pos, to, capacity);
 
@@ -77,6 +83,7 @@ int init_compression_ctx(compress_t *comp, int compression_level) {
     comp->inflate_src_buff_sz = ZSTD_DStreamOutSize();
     comp->inflate_src_buff = malloc(comp->inflate_src_buff_sz);
     assertf(! ZSTD_isError(init_res), C_LOG, L("ZSTD_initDStream() error : %s"), ZSTD_getErrorName(init_res));
+    comp->inflate_src_buff_offset = 0;
     return 0;
 }
 

@@ -35,6 +35,7 @@ struct compress_s {
     ZSTD_DStream* dstream;
 
     uint8_t *inflate_src_buff;
+    uint32_t inflate_src_buff_offset;
 #endif
     
     int deflate_fully_flushed;

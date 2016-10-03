@@ -85,23 +85,25 @@ void do_test(int buff_sz, int buff_dest_sz) {
     rewind(comp_dest);
 
     has_more_data = 1;
-    while (has_more_data || (comp.inflatable_bytes != 0)) {
+    while (has_more_data || (comp.inflatable_bytes != 0) || written == buff_dest_sz) {
         if (comp.inflatable_bytes == 0) {
             ssize_t read_buff_sz = comp.inflate_src_buff_sz > buff_sz ? buff_sz : comp.inflate_src_buff_sz;
             bytes_read = fread(buff, 1, read_buff_sz, comp_dest);
             log_info(C_LOG, L("read bytes: %zd (remaining compressed: %d)\n"), bytes_read, comp.inflatable_bytes);
             if (bytes_read == 0) {
                 has_more_data = 0;
-                continue;
+                if (written < buff_dest_sz) continue;
             } else {
                 memcpy(comp.inflate_src_buff, buff, bytes_read);
                 comp.inflatable_bytes = bytes_read;
                 log_info(C_LOG, L("Adding inflatable bytes: %d\n"), comp.inflatable_bytes);
             }
         }
+        log_info(C_LOG, L("DECOMPRESS IN {inflatable_bytes: %u}"), comp.inflatable_bytes);
         start = clock();
         written = do_decompress(&comp, buff_dest, buff_dest_sz);
         decompress_time += (clock() - start);
+        log_info(C_LOG, L("DECOMPRESS OUT {inflatable_bytes: %u}"), comp.inflatable_bytes);
         assertf(written <= buff_dest_sz, C_LOG, L("wrote more than buffer, wrote: %zd, buff_sz; %d"), written, buff_dest_sz);
         assert(fwrite(buff_dest, 1, written, decomp_dest) == written);
     }
@@ -158,20 +160,20 @@ int main() {
 
     //test_complete_and_consumed_behavior();
     
-    /* do_test(EMBARASSINGLY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ); */
-    /* do_test(VERY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ); */
-    /* do_test(SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ); */
-    /* do_test(LARGE_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ); */
+    do_test(EMBARASSINGLY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
+    do_test(VERY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
+    do_test(SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
+    do_test(LARGE_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
 
-    /* do_test(EMBARASSINGLY_SMALL_BUFF_SZ, VERY_SMALL_BUFF_SZ); */
-    /* do_test(VERY_SMALL_BUFF_SZ, VERY_SMALL_BUFF_SZ); */
-    /* do_test(SMALL_BUFF_SZ, VERY_SMALL_BUFF_SZ); */
-    /* do_test(LARGE_BUFF_SZ, VERY_SMALL_BUFF_SZ); */
+    do_test(EMBARASSINGLY_SMALL_BUFF_SZ, VERY_SMALL_BUFF_SZ);
+    do_test(VERY_SMALL_BUFF_SZ, VERY_SMALL_BUFF_SZ);
+    do_test(SMALL_BUFF_SZ, VERY_SMALL_BUFF_SZ);
+    do_test(LARGE_BUFF_SZ, VERY_SMALL_BUFF_SZ);
 
-    /* do_test(EMBARASSINGLY_SMALL_BUFF_SZ, SMALL_BUFF_SZ); */
-    /* do_test(VERY_SMALL_BUFF_SZ, SMALL_BUFF_SZ); */
-    /* do_test(SMALL_BUFF_SZ, SMALL_BUFF_SZ); */
-    /* do_test(LARGE_BUFF_SZ, SMALL_BUFF_SZ); */
+    do_test(EMBARASSINGLY_SMALL_BUFF_SZ, SMALL_BUFF_SZ);
+    do_test(VERY_SMALL_BUFF_SZ, SMALL_BUFF_SZ);
+    do_test(SMALL_BUFF_SZ, SMALL_BUFF_SZ);
+    do_test(LARGE_BUFF_SZ, SMALL_BUFF_SZ);
 
     do_test(EMBARASSINGLY_SMALL_BUFF_SZ, LARGE_BUFF_SZ);
     do_test(VERY_SMALL_BUFF_SZ, LARGE_BUFF_SZ);
