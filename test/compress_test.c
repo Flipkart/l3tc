@@ -135,7 +135,12 @@ void test_complete_and_consumed_behavior() {
     setup_compress_input(&comp, comp_src, sizeof(comp_src));
     ssize_t compressed_sz = do_compress(&comp, comp_dest, sizeof(comp_dest), &consumed, &complete);
     log_info(C_LOG, L("compressed sz: %zd\n"), compressed_sz);
+#ifdef USE_ZLIB
     assert(compressed_sz == 12);
+#endif
+#ifdef USE_ZSTD
+    assert(compressed_sz == 17);
+#endif
     assert(64 == consumed);
     assert(1 == complete);
     memcpy(comp.inflate_src_buff, comp_dest, compressed_sz);
@@ -149,16 +154,22 @@ void test_complete_and_consumed_behavior() {
     setup_compress_input(&comp, comp_src_xlarge, xlarge_buff_sz);
     compressed_sz = do_compress(&comp, comp_dest, 11, &consumed, &complete);
     assert(compressed_sz == 11);
+    log_info(C_LOG, L("consumed: %zd\n"), consumed);
+#ifdef USE_ZLIB
     assert(4161536 == consumed);
+#endif
+#ifdef USE_ZSTD
+    assert(131072 == consumed);
+#endif
     assert(0 == complete);
     destroy_compression_ctx(&comp);
     free(comp_src_xlarge);
 }
 
 int main() {
-    log_init(3, "test");
+    log_init(1, "test");
 
-    //test_complete_and_consumed_behavior();
+    test_complete_and_consumed_behavior();
     
     do_test(EMBARASSINGLY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
     do_test(VERY_SMALL_BUFF_SZ, EMBARASSINGLY_SMALL_BUFF_SZ);
