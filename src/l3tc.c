@@ -29,6 +29,7 @@
 #include <getopt.h>
 #include <assert.h>
 #include <signal.h>
+#include <compress.h>
 
 extern const char *__progname;
 
@@ -54,7 +55,8 @@ static void usage(void) {
     fprintf(stderr, " -p, --peerList  <path>                           path to file containing list of peers (IP v4/v6 addresses or hostnames)\n");
     fprintf(stderr, " -4, --selfIpv4  <addr>                           hosts own address as seen by peers (IP v4)\n");
     fprintf(stderr, " -6, --selfIpv6  <addr>                           hosts own address as seen by peers (IP v6)\n");
-    fprintf(stderr, " -c, --compLvl  <compression-level>               compression level between (0: none, 1: fast ... 9: best)\n");
+    fprintf(stderr, " -c, --compLvl  <compression-level>               compression level(impl: %s) between (no-compression-supported: %s (value: %d), %d:fast ... %d:default ... %d:best)\n",
+            COMPRESSION_IMPL, (NO_COMPRESSION_LEVEL > 0) ? "yes": "no", NO_COMPRESSION_LEVEL, MIN_COMPRESSION_LEVEL, DEFAULT_COMPRESSION_LEVEL, MAX_COMPRESSION_LEVEL);
     fprintf(stderr, " -s, --setName  <ipset>                           ipset set-name to be used to record peers for selectively compressing flows\n");
     fprintf(stderr, " -u, --upScript <route-up cmd>                    command for setting-up routing (run once tunnel is up)\n");
     fprintf(stderr, " -r, --tryReconnectInterval <seconds>             least number of seconds to wait before re-attempting connect with failed peers\n");
