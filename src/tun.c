@@ -14,10 +14,10 @@
 #include <stdio.h>
 #include <assert.h>
 
-static inline int run_routeup_script(const char *if_name, const char *ipset_name, const char *tun_up_cmd) {
-    char tun_iface_var[100];
-    char ipset_name_var[100];
+static char tun_iface_var[100];
+static char ipset_name_var[100];
 
+static inline int run_routeup_script(const char *if_name, const char *ipset_name, const char *tun_up_cmd) {
     int env_var_len = snprintf(tun_iface_var, sizeof(tun_iface_var), "TUN_IFACE=%s", if_name);
     assert(env_var_len > 0 && (unsigned) env_var_len < sizeof(tun_iface_var));
     assert(putenv(tun_iface_var) == 0);
