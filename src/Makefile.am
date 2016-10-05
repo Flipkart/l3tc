@@ -51,12 +51,10 @@ libcompress_la_LIBADD =  $(AM_LDFLAGS) $(compress_ldflags)
 ## TODO:5000 Automake will find dependencies by itself. Run
 ## TODO:5000 ./autogen.sh after modifying this file.
 
-l3tc_SOURCES  = log.h str_htab.h common.h compress.h tun.c tun.h io.c io.h l3tc.h l3tc.c debug.h debug.c
+l3tc_SOURCES  = tun.c tun.h io.c io.h l3tc.h l3tc.c $(libdebug_la_SOURCES) $(liblogging_la_SOURCES) $(libcommon_la_SOURCES) $(libba_htab_la_SOURCES) $(libcompress_la_SOURCES)
 
 l3tc_CFLAGS   = $(AM_CFLAGS)  $(compress_cflags)
 l3tc_LDFLAGS  = $(AM_LDFLAGS)  $(compress_ldflags)
-
-l3tc_LDADD    = liblogging.la libcommon.la libba_htab.la libcompress.la
 
 ## TODO:2004 Each time you have used `PKG_CHECK_MODULES` macro
 ## TODO:2004 in `configure.ac`, you get two variables that
