@@ -47,12 +47,12 @@ libcompress_la_CPPFLAGS = $(AM_CFLAGS) $(compress_cflags)
 libcompress_la_LIBADD =  $(AM_LDFLAGS) $(compress_ldflags)
 # compression END
 
+
 ## TODO:5000 When you want to add more files, add them below.
 ## TODO:5000 Automake will find dependencies by itself. Run
 ## TODO:5000 ./autogen.sh after modifying this file.
 
-l3tc_SOURCES  = tun.c tun.h io.c io.h l3tc.h l3tc.c $(libdebug_la_SOURCES) $(liblogging_la_SOURCES) $(libcommon_la_SOURCES) $(libba_htab_la_SOURCES) $(libcompress_la_SOURCES)
-
+l3tc_SOURCES  = constants.h tun.c tun.h io.c io.h l3tc.h l3tc.c $(libdebug_la_SOURCES) $(liblogging_la_SOURCES) $(libcommon_la_SOURCES) $(libba_htab_la_SOURCES) $(libcompress_la_SOURCES)
 l3tc_CFLAGS   = $(AM_CFLAGS)  $(compress_cflags)
 l3tc_LDFLAGS  = $(AM_LDFLAGS)  $(compress_ldflags)
 

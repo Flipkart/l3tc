@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include "debug.h"
+#include "constants.h"
 
 #define C_LOG "comp/zstd"
 
@@ -105,3 +106,11 @@ int destroy_compression_ctx(compress_t *comp) {
     return failure;
 }
 
+ssize_t compress_ring_min_sz() {
+    size_t in_sz = ZSTD_CStreamInSize();
+    size_t out_sz = ZSTD_CStreamOutSize();
+    size_t max_actual = in_sz > out_sz ? in_sz : out_sz;
+    size_t next_pwr_of_2 = CONN_RING_SZ;
+    while (next_pwr_of_2 <= max_actual) next_pwr_of_2 <<= 1;
+    return next_pwr_of_2;
+}

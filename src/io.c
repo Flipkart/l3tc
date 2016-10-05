@@ -353,7 +353,6 @@ static inline int expand_ring_buffer(ring_buff_t *rbuff) {
 	return 0;
 }
 
-#define INITIAL_TUN_PKT_BUFF_SZ 4096
 #define MAX_L3_PKT_SZ 0xFFFF /* check hop-by-hop stuff for IPv6, 0xFFFF will do for IPv4 though */
 
 static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
@@ -364,7 +363,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
         log_crit("io", L("couldn't allocate tx-backlog ring for tun"));
         return -1;
     }
-    if ((sock->d.tun.w_buff.buff = malloc(INITIAL_TUN_PKT_BUFF_SZ)) == NULL) {
+    if ((sock->d.tun.w_buff.buff = malloc(MAX_L3_PKT_SZ)) == NULL) {
         log_crit("io", L("couldn't allocate write-pkt-buff for tun"));
         destroy_ring_buff(&sock->d.tun.tx);
         return -1;
@@ -375,7 +374,7 @@ static int init_tun_tx_backlog_ring(io_sock_t *sock, void *io_ctx) {
         destroy_ring_buff(&sock->d.tun.tx);
         return -1;
     }
-    sock->d.tun.r_buff.capacity = sock->d.tun.w_buff.capacity = INITIAL_TUN_PKT_BUFF_SZ;
+    sock->d.tun.r_buff.capacity = sock->d.tun.w_buff.capacity = MAX_L3_PKT_SZ;
     sock->d.tun.r_buff.len = sock->d.tun.w_buff.len = 0;
     sock->d.tun.r_buff.current_pkt_len = sock->d.tun.w_buff.current_pkt_len = 0;
     

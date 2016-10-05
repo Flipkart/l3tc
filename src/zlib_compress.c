@@ -4,6 +4,7 @@
 #include <assert.h>
 #include <string.h>
 #include "debug.h"
+#include "constants.h"
 
 #define C_LOG "comp/zlib"
 
@@ -135,3 +136,6 @@ int destroy_compression_ctx(compress_t *comp) {
     return failure;
 }
 
+ssize_t compress_ring_min_sz() {
+    return CONN_RING_SZ;
+}

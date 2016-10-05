@@ -67,4 +67,6 @@ ssize_t worst_case_compressed_out_sz(compress_t *comp, ssize_t len);
 
 void setup_compress_input(compress_t *comp, void *buff, ssize_t len);
 
+ssize_t compress_ring_min_sz();
+
 #endif
