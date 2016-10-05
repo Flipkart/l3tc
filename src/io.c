@@ -1220,14 +1220,13 @@ static inline int recv_compressed_data(int fd, void *buff, ssize_t max_sz, ssize
 
 static inline void conn_io(uint32_t event, io_sock_t *conn) {
     int ret;
-    int alive = 1;
     if (event & EPOLLOUT) {
         DBG("io", L("called for %d OUT"), conn->fd);
         ret = drain_ring(conn->fd, &conn->d.conn.tx, send_bl_batch, NULL);
         if (connection_practically_dead(ret)) {
             log_warn("io", L("Send failed, connection is being dropped for sock: %d"), conn->fd); 
             destroy_sock(conn);
-            alive = 0;
+            return;
         }
     }
     if (event & EPOLLIN) {
@@ -1240,15 +1239,15 @@ static inline void conn_io(uint32_t event, io_sock_t *conn) {
         if (connection_practically_dead(ret)) {
             log_warn("io", L("Recv failed, connection id being dropped for sock: %d"), conn->fd);
             destroy_sock(conn);
-            alive = 0;
+            return;
         }
     }
     if (event & (EPOLLRDHUP | EPOLLHUP)) {
         log_warn("io", L("Connection closed, connection id being dropped for sock: %d"), conn->fd);
         destroy_sock(conn);
-        alive = 0;
+        return;
     }
-    if (alive && (conn->ctx->low_lat_mode >= DISABLE_DELAYED_ACK)) {
+    if (conn->ctx->low_lat_mode >= DISABLE_DELAYED_ACK) {
         if (setsockopt(conn->fd, IPPROTO_TCP, TCP_QUICKACK, (int[]){1}, sizeof(int)) != 0) {
             log_warn("io", L("Failed to turn-off delayed ack for sock: %d"), conn->fd); 
         }
