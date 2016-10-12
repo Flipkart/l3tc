@@ -29,6 +29,8 @@
 #include <getopt.h>
 #include <assert.h>
 #include <signal.h>
+#include <sys/file.h>
+#include <sys/types.h>
 #include "constants.h"
 #include "compress.h"
 
@@ -62,6 +64,8 @@ static void usage(void) {
     fprintf(stderr, " -t, --tunRingSz <sz>                             size for ring-buffers behind tunnel (bytes) \n");
 	fprintf(stderr, " -a, --adaptiveRingSz                             enable adaptive-sizing for ring-buffers (expand as needed) \n");
 	fprintf(stderr, " -M, --maxRingSz <sz>                             maximum allowed size of a ring (bytes) \n");
+    fprintf(stderr, " -S, --socketBuffSz <sz>                          buffer size for connection rx and tx buffer (bytes) \n");
+    fprintf(stderr, " -P, --pidFile <path>                             path to pid-file (it'll overwrite contents) \n");    
 	fprintf(stderr, "\n");
 	fprintf(stderr, "see manual page " PACKAGE "(8) for more information\n");
 }
@@ -70,6 +74,41 @@ void wireup_signals() {
     assert(signal(SIGINT, trigger_io_loop_stop) != SIG_ERR);
     assert(signal(SIGTERM, trigger_io_loop_stop) != SIG_ERR);
     assert(signal(SIGHUP, trigger_peer_reset) != SIG_ERR);
+}
+
+static int lock_and_write_pid(const char *pid_file) {
+    int pid_fd = open(pid_file, O_CREAT | O_WRONLY);
+    if (pid_fd < 0) {
+        log_warn("main", L("Couldn't create pid-file '%s'"), pid_file);
+        return -1;
+    }
+    
+    char pid_buff[16];
+    ssize_t str_len;
+    int err = 0;
+
+    if (! err && (flock(pid_fd, LOCK_EX | LOCK_NB) != 0)) {
+        log_warn("main", L("Couldn't lock pid-file '%s' (fd: %d)"), pid_file, pid_fd);
+        err = 1;
+    }
+
+    if (! err && (ftruncate(pid_fd, 0) != 0)) {
+        log_warn("main", L("Couldn't truncate pid-file '%s' (fd: %d)"), pid_file, pid_fd);
+        err = 1;
+    }
+    if (! err) {
+        str_len = snprintf(pid_buff, sizeof(pid_buff), "%u\n", getpid());
+        if (write(pid_fd, pid_buff, str_len) < str_len) {
+            log_warn("main", L("Couldn't write pid-value to pid-file '%s' (fd: %d)"), pid_file, pid_fd);
+            err = 1;
+        }
+    }
+    if (err) {
+        close(pid_fd);
+        return -1;
+    } else {
+        return pid_fd;
+    }
 }
 
 int main(int argc, char *argv[]) {
@@ -84,7 +123,8 @@ int main(int argc, char *argv[]) {
     char *route_up_cmd = NULL;
     int try_reconnect_itvl = 30;
     int low_latency_aggressiveness = 0;
-    ring_sz_t ring_sz = {TUN_RING_SZ, CONN_RING_SZ, MAX_RING_SZ, 0};
+    ring_sz_t ring_sz = {TUN_RING_SZ, CONN_RING_SZ, MAX_RING_SZ, 0, SOCK_BUFF_SZ};
+    char *pid_file = NULL;
 
 	/* TODO:3001 If you want to add more options, add them here. */
 	static struct option long_options[] = {
@@ -104,10 +144,12 @@ int main(int argc, char *argv[]) {
                 { "tunRingSz", required_argument, 0, 't' },
 				{ "maxRingSz", required_argument, 0, 'M' },
 				{ "adaptiveRingSz", no_argument, 0, 'a' },
+				{ "socketBuffSz", required_argument, 0, 'S' },
+				{ "pidFile", required_argument, 0, 'P' },
                 { 0 }};
 	while (1) {
 		int option_index = 0;
-		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:L:e:t:aM:",
+		ch = getopt_long(argc, argv, "hvdD:l:c:p:4:6:s:u:r:L:e:t:aM:S:P:",
 		    long_options, &option_index);
 		if (ch == -1) break;
 		switch (ch) {
@@ -169,6 +211,12 @@ int main(int argc, char *argv[]) {
         case 'M':
             ring_sz.max_allowed = atoi(optarg);
             break;
+        case 'S':
+            ring_sz.sobuff = atoi(optarg);
+            break;
+        case 'P':
+            pid_file = strndup(optarg, MAX_FILE_PATH_LEN);
+            break;
 		default:
 			fprintf(stderr, "unknown option `%c'\n", ch);
 			usage();
@@ -180,6 +228,10 @@ int main(int argc, char *argv[]) {
 
     const char *error = NULL;
 
+    int pid_fd = lock_and_write_pid(pid_file);
+    if ((pid_file != NULL) && (pid_fd <= 0))
+        error = "Couldn't create/lock/write-to pid-file";
+
     if (ring_sz.conn < compress_ring_min_sz()) {
         ring_sz.conn = compress_ring_min_sz();
         log_warn("main", "Enforcing %zd as conn-ring sz, due to compression impl provided lower-bound.", ring_sz.conn);
@@ -190,7 +242,7 @@ int main(int argc, char *argv[]) {
     }
 
     if ((! error) && (self_addr_v4 == NULL && self_addr_v6 == NULL)) {
-        error = "Self address not provided, please provide either v4 or v6.";
+        error = "Self address not provided, please provide either v4 or v6";
     }
 
     if ((! error) && (route_up_cmd == NULL)) {
@@ -220,8 +272,11 @@ int main(int argc, char *argv[]) {
     free(ipset_name);
     free(route_up_cmd);
     free(peer_file);
+    free(pid_file);
     if (tun_fd > 0)
         close(tun_fd);
+    if (pid_fd > 0)
+        close(pid_fd);
     
     if (error) {
         fatalx(error);

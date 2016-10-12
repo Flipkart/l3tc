@@ -69,21 +69,32 @@ $blue_ip" > $peer_file
 
 ulimit -c unlimited
 
-e red valgrind --leak-check=full ../src/l3tc -d -d -p $peer_file -4 $red_ip -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &
+cmd_prefix="valgrind --leak-check=full"
+cmd_prefix=""
+
+red_pid_file=$tmp_dir/red.pid
+green_pid_file=$tmp_dir/green.pid
+blue_pid_file=$tmp_dir/blue.pid
+
+e red $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $red_ip -P $red_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &
 red_pid=$!
-e green valgrind --leak-check=full ../src/l3tc -d -d -p $peer_file -4 $green_ip -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &
+e green $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $green_ip -P $green_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &
 green_pid=$!
-e blue valgrind --leak-check=full ../src/l3tc -d -d -p $peer_file -4 $blue_ip -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
+e blue $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $blue_ip -P $blue_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
 blue_pid=$!
 
-e red ping -c 1 $green_ip
-e red ping -c 1 $blue_ip
-e green ping -c 1 $blue_ip
-e green ping -c 1 $red_ip
-e blue ping -c 1 $red_ip
-e blue ping -c 1 $green_ip
+sleep 20
 
-kill -TERM $red_pid $green_pid $blue_pid
+e red ping -c 10 $green_ip
+e red ping -c 10 $blue_ip
+e green ping -c 10 $blue_ip
+e green ping -c 10 $red_ip
+e blue ping -c 10 $red_ip
+e blue ping -c 10 $green_ip
+
+pkill -F $red_pid_file
+pkill -F $green_pid_file
+pkill -F $blue_pid_file
 
 wait $red_pid && echo "Red came clean"
 wait $green_pid  && echo "Green came clean"

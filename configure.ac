@@ -94,7 +94,7 @@ AS_IF(
 AM_CONDITIONAL(USE_ZSTD, test "x$USE_ZSTD" = "xyes")
 AM_CONDITIONAL(USE_ZLIB, test "x$USE_ZLIB" = "xyes")
 
-AC_CHECK_HEADERS([stdint.h errno.h time.h sys/types.h sys/socket.h netdb.h sys/epoll.h sys/queue.h uthash.h assert.h sys/uio.h netinet/in.h netinet/ip.h unistd.h fcntl.h arpa/inet.h])
+AC_CHECK_HEADERS([stdint.h errno.h time.h sys/types.h sys/socket.h netdb.h sys/epoll.h sys/queue.h uthash.h assert.h sys/uio.h netinet/in.h netinet/ip.h unistd.h fcntl.h arpa/inet.h sys/file.h])
 
 AC_ARG_ENABLE(valgrind,
         [AS_HELP_STRING([--enable-valgrind], [Run testbench with valgrind. @<:@default=no@:>@])],

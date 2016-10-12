@@ -117,6 +117,7 @@ struct io_ctx_s {
     ssize_t tun_ring_sz;
     ssize_t conn_ring_sz;
 	ssize_t max_allowed_ring_sz;
+    ssize_t sobuff_sz;
 	int resize_rings;
 };
 
@@ -419,6 +420,7 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
     ctx->conn_ring_sz = ring_sz->conn;
 	ctx->max_allowed_ring_sz = ring_sz->max_allowed;
 	ctx->resize_rings = ring_sz->do_resize;
+    ctx->sobuff_sz = ring_sz->sobuff;
     LIST_INIT(&ctx->disconnected_passive_peers);
     LIST_INIT(&ctx->non_conns);
     if (self_addr_v4 != NULL) {
@@ -576,6 +578,16 @@ static int init_conn_sock(io_sock_t *sock, void *_addr_info) {
     if (sock->ctx->low_lat_mode >= DISABLE_NAGLE_ALGO) {
         if (setsockopt(sock->fd, IPPROTO_TCP, TCP_NODELAY, (int[]){1}, sizeof(int)) != 0) {
             log_warn("io", L("Failed to turn-off Nagle's algorithm for sock: %d"), sock->fd);
+        }
+    }
+    if (setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUF, &ctx->sobuff_sz, sizeof(ctx->sobuff_sz)) != 0) {
+        if (setsockopt(sock->fd, SOL_SOCKET, SO_RCVBUFFORCE, &ctx->sobuff_sz, sizeof(ctx->sobuff_sz)) != 0) {
+            log_warn("io", L("Couldn't set socket recive-buffer size to: %zd"), ctx->sobuff_sz);
+        }
+    }
+    if (setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUF, &ctx->sobuff_sz, sizeof(ctx->sobuff_sz)) != 0) {
+        if (setsockopt(sock->fd, SOL_SOCKET, SO_SNDBUFFORCE, &ctx->sobuff_sz, sizeof(ctx->sobuff_sz)) != 0) {
+            log_warn("io", L("Couldn't set socket send-buffer size to: %zd"), ctx->sobuff_sz);
         }
     }
     return 0;

@@ -12,6 +12,7 @@ struct ring_sz_s {
     ssize_t conn;
 	ssize_t max_allowed;
 	int do_resize;
+    ssize_t  sobuff;
 };
 
 typedef struct ring_sz_s ring_sz_t;
