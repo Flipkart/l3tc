@@ -34,6 +34,7 @@
 
 /* By default, logging is done on stderr. */
 int	 debug = 1;
+int	 stderr_is_tty = 0;
 
 /* Logging can be modified by providing an appropriate log handler. */
 static void (*logh)(int severity, const char *msg, void *) = NULL;
@@ -54,6 +55,7 @@ log_init(int n_debug, const char *progname)
 		openlog(progname, LOG_PID | LOG_NDELAY, LOG_DAEMON);
 
 	tzset();
+    stderr_is_tty = isatty(STDERR_FILENO);
 }
 
 void
@@ -98,11 +100,10 @@ date()
 }
 
 static const char *
-translate(int fd, int priority)
+translate(int outfd_is_tty, int priority)
 {
 	/* Translate a syslog priority to a string. With colors if the output is a terminal. */
-	int tty = isatty(fd);
-	switch (tty) {
+	switch (outfd_is_tty) {
 	case 1:
 		switch (priority) {
 		case LOG_EMERG:   return "\033[1;37;41m[EMRG";
@@ -147,9 +148,9 @@ vlog(int pri, const char *token, const char *fmt, va_list ap)
 		/* best effort in out of mem situations */
 		if (asprintf(&nfmt, "%s %s%s%s]%s %s\n",
 			date(),
-			translate(STDERR_FILENO, pri),
+			translate(stderr_is_tty, pri),
 			token ? "/" : "", token ? token : "",
-			isatty(STDERR_FILENO) ? "\033[0m" : "",
+            stderr_is_tty ? "\033[0m" : "",
 			fmt) == -1) {
 			vfprintf(stderr, fmt, ap);
 			fprintf(stderr, "\n");
@@ -168,6 +169,7 @@ log_warn(const char *token, const char *emsg, ...)
 {
 	char	*nfmt;
 	va_list	 ap;
+    int orig_errno = errno;
 
 	/* best effort to even work in out of memory situations */
 	if (emsg == NULL)
@@ -185,38 +187,42 @@ log_warn(const char *token, const char *emsg, ...)
 		}
 		va_end(ap);
 	}
+    errno = orig_errno;
 }
 
 void
 log_warnx(const char *token, const char *emsg, ...)
 {
 	va_list	 ap;
-
+    int orig_errno = errno;
 	va_start(ap, emsg);
 	vlog(LOG_WARNING, token, emsg, ap);
 	va_end(ap);
+    errno = orig_errno;
 }
 
 void
 log_crit(const char *token, const char *emsg, ...)
 {
 	va_list  ap;
-
+    int orig_errno = errno;
 	va_start(ap, emsg);
 	vlog(LOG_CRIT, token, emsg, ap);
 	va_end(ap);
+    errno = orig_errno;
 }
 
 void
 log_info(const char *token, const char *emsg, ...)
 {
 	va_list	 ap;
-
+    int orig_errno = errno;
 	if (debug > 1 || logh) {
 		va_start(ap, emsg);
 		vlog(LOG_INFO, token, emsg, ap);
 		va_end(ap);
 	}
+    errno = orig_errno;
 }
 
 static int
@@ -237,12 +243,13 @@ void
 log_debug(const char *token, const char *emsg, ...)
 {
 	va_list	 ap;
-
+    int orig_errno = errno;
 	if ((debug > 2 && log_debug_accept_token(token)) || logh) {
 		va_start(ap, emsg);
 		vlog(LOG_DEBUG, token, emsg, ap);
 		va_end(ap);
 	}
+    errno = orig_errno;
 }
 
 void
