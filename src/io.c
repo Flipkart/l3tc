@@ -461,6 +461,23 @@ static io_ctx_t * init_io_ctx(int tun_fd, const char *self_addr_v4, const char *
     return ctx;
 }
 
+static int make_non_blocking(int fd) {
+    int flags;
+
+    if ((flags = fcntl(fd, F_GETFL)) == -1) {
+        log_warn("io", L("couldn't get fd %d status-flags"), fd);
+        return -1;
+    }
+
+    flags |= O_NONBLOCK;
+    if (fcntl(fd, F_SETFL, flags) == -1) {
+        log_warn("io", L("failed to make fd %d non-blocking"), fd);
+        return -1;
+    }
+
+    return 0;
+}
+
 static int setup_listener(io_ctx_t *ctx, int listener_port) {
     char buff[8];
     struct addrinfo hints, *res = NULL, *r;
@@ -493,17 +510,7 @@ static int setup_listener(io_ctx_t *ctx, int listener_port) {
 			continue;
 		}
 
-        int sockflags;
-
-        if ((sockflags = fcntl(sock, F_GETFL)) == -1) {
-            log_warn("io", L("couldn't get socket-flags"));
-            close(sock);
-            continue;
-		}
-
-        sockflags |= O_NONBLOCK;
-        if (fcntl(sock, F_SETFL, sockflags) == -1) {
-            log_warn("io", L("failed to make socket non-blocking"));
+        if (make_non_blocking(sock) != 0) {
             close(sock);
             continue;
         }
@@ -1527,6 +1534,24 @@ static void fix_broken_connections(io_ctx_t *ctx) {
     }
 }
 
+#define tun_flush_quanta 4096
+
+static void flush_tun(int tun_fd) {
+    int dev_null = open("/dev/null", O_WRONLY);
+    if (make_non_blocking(dev_null) != 0) {
+        close(dev_null);
+        log_warn("io", L("couldn't flush tun before hooking it into polling context in edge-triggered mode"));
+        return;
+    }
+    ssize_t written, written_total = 0;
+    do {
+        written = splice(tun_fd, 0, dev_null, 0, tun_flush_quanta, SPLICE_F_MOVE|SPLICE_F_NONBLOCK);
+        written_total += written;
+    } while(written == tun_flush_quanta);
+    log_warn("io", L("Flushed %zd garbage bytes from tun"), written_total);
+    close(dev_null);
+}
+
 #define MAX_POLLED_EVENTS 256
 
 int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const char *self_addr_v6, int listener_port, const char *ipset_name, int try_reconnect_itvl, int compression_level, int low_latency_aggressiveness, ring_sz_t *ring_sz) {
@@ -1536,6 +1561,7 @@ int io(int tun_fd, const char* peer_file_path, const char *self_addr_v4, const c
     if ((ctx = init_io_ctx(tun_fd, self_addr_v4, self_addr_v6, ipset_name, compression_level, low_latency_aggressiveness, ring_sz)) != NULL) {
         if (setup_listener(ctx, listener_port) == 0) {
             trigger_peer_reset();
+            flush_tun(tun_fd);
             int num_evts;
             struct epoll_event evts[MAX_POLLED_EVENTS];
             while ( ! do_stop) {

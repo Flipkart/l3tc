@@ -59,6 +59,13 @@ e green ping -c 1 $red_ip
 e blue ping -c 1 $red_ip
 e blue ping -c 1 $green_ip
 
+e red sysctl -w net.ipv4.conf.all.rp_filter=0
+e red sysctl -w net.ipv4.conf.default.rp_filter=0
+e green sysctl -w net.ipv4.conf.all.rp_filter=0
+e green sysctl -w net.ipv4.conf.default.rp_filter=0
+e blue sysctl -w net.ipv4.conf.all.rp_filter=0
+e blue sysctl -w net.ipv4.conf.default.rp_filter=0
+
 tmp_dir=$(readlink -f test.tmp)
 mkdir -p $tmp_dir
 peer_file=$tmp_dir/peers
@@ -83,14 +90,20 @@ green_pid=$!
 e blue $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $blue_ip -P $blue_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
 blue_pid=$!
 
-sleep 20
+while [ $(e red netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; do
+    sleep .2
+done
 
-e red ping -c 10 $green_ip
-e red ping -c 10 $blue_ip
-e green ping -c 10 $blue_ip
-e green ping -c 10 $red_ip
-e blue ping -c 10 $red_ip
-e blue ping -c 10 $green_ip
+while [ $(e green netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; do
+    sleep .2
+done
+
+e red ping -c 1 $green_ip
+e red ping -c 1 $blue_ip
+e green ping -c 1 $blue_ip
+e green ping -c 1 $red_ip
+e blue ping -c 1 $red_ip
+e blue ping -c 1 $green_ip
 
 pkill -F $red_pid_file
 pkill -F $green_pid_file
