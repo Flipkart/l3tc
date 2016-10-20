@@ -1,5 +1,9 @@
 #!/bin/bash
 
+set -e
+
+shopt -s expand_aliases
+
 test_ns=l3tc_
 sudo_bin=$(which sudo)
 
@@ -17,6 +21,13 @@ function create_fresh_netns {
     local name=$test_ns$1
     local match=$(ip netns list | grep "^$name\$")
     if [ "x$match" != "x" ]; then
+        set +e
+        sudo ip netns pid $name | grep -q .
+        has_processes=$?
+        set -e
+        if [ "x$has_processes" == "x0" ]; then
+            sudo ip netns pid $name | xargs sudo ip netns exec kill -9 
+        fi
         sudo ip netns del $name
     fi
     sudo ip netns add $name
@@ -91,29 +102,72 @@ red_pid_file=$tmp_dir/red.pid
 green_pid_file=$tmp_dir/green.pid
 blue_pid_file=$tmp_dir/blue.pid
 
-e red $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $red_ip -P $red_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &
-red_pid=$!
-e green $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $green_ip -P $green_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &
-green_pid=$!
-e blue $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $blue_ip -P $blue_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &
-blue_pid=$!
+red_launch_pid_file=$tmp_dir/red_launch.pid
+green_launch_pid_file=$tmp_dir/green_launch.pid
+blue_launch_pid_file=$tmp_dir/blue_launch.pid
 
-while [ $(e red netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; do
-    sleep .2
-done
+function capture_launch_pid {
+    local launch_pid=$!
+    echo -n $launch_pid > $1
+}
 
-while [ $(e green netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; do
-    sleep .2
-done
+alias start_red="e red $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $red_ip -P $red_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &"
+alias start_green="e green $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $green_ip -P $green_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &"
+alias start_blue="e blue $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $blue_ip -P $blue_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &"
+function launch_red {
+    start_red
+    capture_launch_pid $red_launch_pid_file
+}
+function launch_green {
+    start_green
+    capture_launch_pid $green_launch_pid_file
+}
+function launch_blue {
+    start_blue
+    capture_launch_pid $blue_launch_pid_file
+}
+
+alias kill_red="e red pkill -F $red_pid_file"
+alias kill_green="e red pkill -F $green_pid_file"
+alias kill_blue="e red pkill -F $blue_pid_file"
+
+function await_red {
+    wait $(cat $red_launch_pid_file) && echo 'Red came clean'
+}
+function await_green {
+    wait $(cat $green_launch_pid_file) && echo 'Green came clean'
+}
+function await_blue {
+    wait $(cat $blue_launch_pid_file) && echo 'Blue came clean'
+}
+
+launch_red
+launch_green
+launch_blue
+
+function await_red_l3tc_up {
+    while [ $(e red netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; do
+        sleep .2
+    done
+}
+
+function await_green_l3tc_up {
+    while [ $(e green netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; do
+        sleep .2
+    done
+}
+
+await_red_l3tc_up
+await_green_l3tc_up
 
 function l3tc_cleanup {
-    e red pkill -F $red_pid_file
-    e green pkill -F $green_pid_file
-    e blue pkill -F $blue_pid_file
+    kill_red
+    kill_green
+    kill_blue
 
-    wait $red_pid && echo "Red came clean"
-    wait $green_pid  && echo "Green came clean"
-    wait $blue_pid && echo "Blue came clean"
+    await_red
+    await_green
+    await_blue
 }
 
 trap l3tc_cleanup EXIT

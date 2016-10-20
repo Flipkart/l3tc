@@ -31,7 +31,9 @@ debug_test_LDADD = $(AM_LDFLAGS) ../src/libdebug.la
 
 TESTS = $(check_PROGRAMS)
 if RUN_INTEGRATION_TESTS
-TESTS += ping_test_within_l2_domain.sh
+TESTS += \
+	ping_test_within_l2_domain.sh \
+	ping_test_with_l3tc_restart.sh
 endif
 
 if WITH_VALGRIND
@@ -45,4 +47,6 @@ EXTRA_DIST = \
 	byte_array_htab_test-vg.sh \
   _single_l2_domain_setup.sh \
 	ping_test_within_l2_domain.sh \
-	compress_test-vg.sh
+	compress_test-vg.sh \
+	_fast_ping \
+	ping_test_with_l3tc_restart.sh
