@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -x
-
 . _single_l2_domain_setup.sh
 
 e red ping -A -c 1000 $green_ip
