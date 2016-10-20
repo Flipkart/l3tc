@@ -33,7 +33,8 @@ TESTS = $(check_PROGRAMS)
 if RUN_INTEGRATION_TESTS
 TESTS += \
 	ping_test_within_l2_domain.sh \
-	ping_test_with_l3tc_restart.sh
+	ping_test_with_l3tc_restart.sh \
+	perfectly_compressable_workload_test.sh
 endif
 
 if WITH_VALGRIND
@@ -49,4 +50,5 @@ EXTRA_DIST = \
 	ping_test_within_l2_domain.sh \
 	compress_test-vg.sh \
 	_fast_ping \
-	ping_test_with_l3tc_restart.sh
+	ping_test_with_l3tc_restart.sh \
+	perfectly_compressable_workload_test.sh
