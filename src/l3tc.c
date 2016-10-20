@@ -30,6 +30,7 @@
 #include <assert.h>
 #include <signal.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include "constants.h"
 #include "compress.h"
@@ -82,10 +83,13 @@ static int lock_and_write_pid(const char *pid_file) {
         log_warn("main", L("Couldn't create pid-file '%s'"), pid_file);
         return -1;
     }
-    
     char pid_buff[16];
     ssize_t str_len;
     int err = 0;
+    if (fchmod(pid_fd, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH) != 0) {
+        log_warn("main", L("Couldn't set appropriate permissions for pid-file '%s' (fd: %d)"), pid_file, pid_fd);
+        err = 1;
+    }
 
     if (! err && (flock(pid_fd, LOCK_EX | LOCK_NB) != 0)) {
         log_warn("main", L("Couldn't lock pid-file '%s' (fd: %d)"), pid_file, pid_fd);

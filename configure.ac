@@ -64,15 +64,11 @@ esac
 AC_CACHE_SAVE
 
 # zstd or zlib
-AC_ARG_ENABLE(zstd,
-        [AS_HELP_STRING([--enable-zstd],[Use zstd (new compression lib by facebook) insteed of default (zlib) @<:@default=no@:>@])],
-        [case "${enableval}" in
-         yes) enable_zstd="yes" ;;
-          no) enable_zstd="no" ;;
-           *) AC_MSG_ERROR(bad value ${enableval} for --enable-zstd) ;;
-         esac],
-        [enable_zstd="no"]
-)
+AC_ARG_VAR(use_compression, AS_HELP_STRING([use_compression=(zstd|zlib)], [Use 'zlib' or 'zstd' (new compression lib by facebook) @<:@default=zlib@:>@]))
+AS_IF([test "x$use_compression" == "x"], [use_compression="zlib"])
+AS_IF([test "x$use_compression" != "xzstd" && test "x$use_compression" != "xzlib"],
+      [AC_MSG_ERROR([bad value use_compression='${use_compression}' (supported/valid values are 'zlib' and 'zstd')])])
+
 PKG_CHECK_MODULES([ZLIB], [zlib], [
   has_zlib='yes'
 ], [AC_MSG_NOTICE([Didn't find zLib!])])
@@ -80,12 +76,12 @@ PKG_CHECK_MODULES([ZSTD], [libzstd], [
   has_zstd='yes'
 ], [AC_MSG_NOTICE([Didn't find ZStd!])])
 AS_IF(
-[test "x$enable_zstd" = "xyes" && test "x$has_zstd" == "xyes"], [
+[test "x$use_compression" = "xzstd" && test "x$has_zstd" = "xyes"], [
     AC_MSG_NOTICE([ZStandard chosen as prefered compression impl])
     USE_ZSTD="yes"
     AC_DEFINE(USE_ZSTD, 1, [Use ZStandard])
 ],
-[test "x$has_zlib" == "xyes"], [
+[test "x$use_compression" = "xzlib" && test "x$has_zlib" = "xyes"], [
     AC_MSG_NOTICE([zLib chosen as prefered compression impl])
     USE_ZLIB="yes"
     AC_DEFINE(USE_ZLIB, 1, [Use zLib])
@@ -108,13 +104,31 @@ AC_ARG_ENABLE(valgrind,
 AC_CHECK_PROG([has_valgrind], [valgrind], ["yes"], ["no"])
 
 AS_IF(
-[test "x$enable_valgrind" = "xyes" && test "x$has_valgrind" == "xyes"], [
+[test "x$enable_valgrind" = "xyes" && test "x$has_valgrind" = "xyes"], [
     AC_MSG_NOTICE([Valgrind enabled for test-run])
     USE_VALGRIND="yes"
 ],
 [USE_VALGRIND="no"])
-
 AM_CONDITIONAL(WITH_VALGRIND, test $USE_VALGRIND == "yes")
+
+AC_ARG_ENABLE(integration_tests,
+        [AS_HELP_STRING([--enable-integration_tests], [Run testbench with integration_tests. @<:@default=no@:>@])],
+        [case "${enableval}" in
+         yes) enable_integration_tests="yes" ;;
+          no) enable_integration_tests="no" ;;
+           *) AC_MSG_ERROR(bad value ${enableval} for --enable-integration_tests) ;;
+         esac],
+        [enable_integration_tests=no]
+)
+AC_CHECK_PROG([has_bash], [bash], ["yes"], ["no"])
+
+AS_IF(
+[test "x$enable_integration_tests" = "xyes" && test "x$has_bash" = "xyes"], [
+    integration_test_capable=$(/bin/bash integration_test_capability_check.sh)
+])
+AS_IF([test "x$integration_test_capable" != "xyes" ], [integration_test_capable="no"])
+
+AM_CONDITIONAL(RUN_INTEGRATION_TESTS, test "x$integration_test_capable" = "xyes")
 
 AC_SUBST([MORE_CFLAGS])
 AC_SUBST([MORE_CPPFLAGS])
@@ -126,9 +140,12 @@ cat <<EOF
 
 ------------------ Summary ------------------
  $PACKAGE_NAME version $PACKAGE_VERSION
-  Prefix..............: $prefix
-  C Compiler..........: $CC $MORE_CFLAGS $MORE_CPPFLAGS $CFLAGS $CPPFLAGS
-  Linker..............: $LD $MORE_LDFLAGS $LDFLAGS $LIBS
+  Prefix.......................: $prefix
+  C Compiler...................: $CC $MORE_CFLAGS $MORE_CPPFLAGS $CFLAGS $CPPFLAGS
+  Linker.......................: $LD $MORE_LDFLAGS $LDFLAGS $LIBS
+  Available compression impls..: zlib: ${has_zlib:-no}, zstd: ${has_zstd:-no}
+  Use compression impl ........: $use_compression
+  Integration Tests............: $integration_test_capable
 ---------------------------------------------
 
 Check the above options and compile with:

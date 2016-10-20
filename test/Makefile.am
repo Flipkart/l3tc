@@ -30,8 +30,9 @@ debug_test_CPPFLAGS = $(AM_CFLAGS)
 debug_test_LDADD = $(AM_LDFLAGS) ../src/libdebug.la
 
 TESTS = $(check_PROGRAMS)
-# integration test that uses netns over veth connected to bridge is commented out because for some reason linux doesn't seem to take packets from tun (RX from tun seems broken, will debug someday and then enable this)
-# TESTS += nocompress_integration_test.sh 
+if RUN_INTEGRATION_TESTS
+TESTS += ping_test_within_l2_domain.sh
+endif
 
 if WITH_VALGRIND
 TESTS += str_htab_test-vg.sh \
@@ -42,5 +43,6 @@ endif
 EXTRA_DIST = \
 	str_htab_test-vg.sh \
 	byte_array_htab_test-vg.sh \
-	nocompress_integration_test.sh \
+  _single_l2_domain_setup.sh \
+	ping_test_within_l2_domain.sh \
 	compress_test-vg.sh

@@ -1,25 +1,33 @@
 #!/bin/bash
 
-set -x
-set -e
-
 test_ns=l3tc_
+sudo_bin=$(which sudo)
 
-function create_fresh_netns() {
+if [ "x$sudo_bin" == "x" ]; then
+    echo "Can't find 'sudo', aborting integration-test."
+    exit 1
+fi
+
+function sudo {
+    echo "[SUDO] Running sudo command: $*" >&2
+    $sudo_bin $*
+}
+
+function create_fresh_netns {
     local name=$test_ns$1
     local match=$(ip netns list | grep "^$name\$")
     if [ "x$match" != "x" ]; then
-        ip netns del $name
+        sudo ip netns del $name
     fi
-    ip netns add $name
+    sudo ip netns add $name
 }
 
 for n in $(echo sw red green blue); do
     create_fresh_netns $n
 done
 
-function e() {
-    ip netns exec $test_ns$*
+function e {
+    sudo ip netns exec $test_ns$*
 }
 
 e sw ip link add r0 type veth peer name r1
@@ -98,17 +106,15 @@ while [ $(e green netstat -antl | grep :15 | grep ESTABLISHED | wc -l) != 2 ]; d
     sleep .2
 done
 
-e red ping -c 1 $green_ip
-e red ping -c 1 $blue_ip
-e green ping -c 1 $blue_ip
-e green ping -c 1 $red_ip
-e blue ping -c 1 $red_ip
-e blue ping -c 1 $green_ip
+function l3tc_cleanup {
+    e red pkill -F $red_pid_file
+    e green pkill -F $green_pid_file
+    e blue pkill -F $blue_pid_file
 
-pkill -F $red_pid_file
-pkill -F $green_pid_file
-pkill -F $blue_pid_file
+    wait $red_pid && echo "Red came clean"
+    wait $green_pid  && echo "Green came clean"
+    wait $blue_pid && echo "Blue came clean"
+}
 
-wait $red_pid && echo "Red came clean"
-wait $green_pid  && echo "Green came clean"
-wait $blue_pid && echo "Blue came clean"
+trap l3tc_cleanup EXIT
+
