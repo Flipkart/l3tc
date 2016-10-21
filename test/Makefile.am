@@ -51,4 +51,5 @@ EXTRA_DIST = \
 	compress_test-vg.sh \
 	_fast_ping \
 	ping_test_with_l3tc_restart.sh \
-	perfectly_compressable_workload_test.sh
+	perfectly_compressable_workload_test.sh \
+	performance_test.sh

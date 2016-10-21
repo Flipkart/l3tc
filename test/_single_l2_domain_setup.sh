@@ -26,7 +26,7 @@ function create_fresh_netns {
         has_processes=$?
         set -e
         if [ "x$has_processes" == "x0" ]; then
-            sudo ip netns pid $name | xargs sudo ip netns exec kill -9 
+            sudo ip netns pid $name | xargs sudo ip netns exec $name kill -9 
         fi
         sudo ip netns del $name
     fi
@@ -111,9 +111,13 @@ function capture_launch_pid {
     echo -n $launch_pid > $1
 }
 
-alias start_red="e red $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $red_ip -P $red_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &"
-alias start_green="e green $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $green_ip -P $green_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &"
-alias start_blue="e blue $cmd_prefix ../src/l3tc -L 1 -d -d -p $peer_file -4 $blue_ip -P $blue_pid_file -c 0 -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &"
+log_frag=${log_severity_frag:-" "}
+opts=${additional_opts:-"-L 1"}
+comp_lvl=${compression_level:-1}
+
+alias start_red="e red $cmd_prefix ../src/l3tc $opts $log_frag -p $peer_file -4 $red_ip -P $red_pid_file -c $comp_lvl -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/red.log 2>&1 &"
+alias start_green="e green $cmd_prefix ../src/l3tc $opts $log_frag -p $peer_file -4 $green_ip -P $green_pid_file -c $comp_lvl -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/green.log 2>&1 &"
+alias start_blue="e blue $cmd_prefix ../src/l3tc $opts $log_frag -p $peer_file -4 $blue_ip -P $blue_pid_file -c $comp_lvl -r 1 -u ../scripts/l3tc_routeup.sh >$tmp_dir/blue.log 2>&1 &"
 function launch_red {
     start_red
     capture_launch_pid $red_launch_pid_file

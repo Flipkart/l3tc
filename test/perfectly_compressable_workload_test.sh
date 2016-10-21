@@ -28,10 +28,15 @@ wait $server_pid
 e sw ifconfig g0 | grep 'TX' | grep -o 'bytes [0-9]\+' | cut -d' ' -f2 > $f_green_tx_after
 e sw ifconfig r0 | grep 'RX' | grep -o 'bytes [0-9]\+' | cut -d' ' -f2 > $f_red_rx_after
 
-green_tx=$(expr $(cat $f_green_tx_after) '-' $(cat $f_green_tx_before))
-red_rx=$(expr $(cat $f_red_rx_after) '-' $(cat $f_red_rx_before))
 bytes_xfered=$(cat $f_bytes_xfered)
 
+if [ $bytes -ne $bytes_xfered ]; then
+    echo "Incomplete transfer: Source was supposed to push $bytes bytes, whereas only $bytes_xfered bytes were copied-over."
+    exit 1
+fi
+
+green_tx=$(expr $(cat $f_green_tx_after) '-' $(cat $f_green_tx_before))
+red_rx=$(expr $(cat $f_red_rx_after) '-' $(cat $f_red_rx_before))
 compression_ratio=$(expr $bytes_xfered '/' $red_rx)
 echo "Compression ratio: $compression_ratio"
 
